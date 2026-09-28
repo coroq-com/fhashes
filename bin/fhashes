@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""fhashes コマンドの入口。実際の処理は fhashes/cli.py にある。"""
+
+import os
+import sys
+
+# このファイルの 1 つ上のディレクトリ（プロジェクトのルート）から fhashes パッケージを読み込む
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+
+from fhashes.cli import main  # noqa: E402
+
+sys.exit(main())

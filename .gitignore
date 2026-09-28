@@ -1,0 +1,7 @@
+data/
+__pycache__/
+*.pyc
+
+# config/ の下は、すべて git の管理外にする（設定ファイル・鍵ファイルなど）。設定の例は docs/ にある
+config/*
+!config/.gitkeep

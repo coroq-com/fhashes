@@ -1,0 +1,21 @@
+[Unit]
+Description=fhashes: ファイルのハッシュの記録
+
+[Service]
+Type=oneshot
+# 監視に使うユーザー（一般ユーザーなら、そのユーザーが読めるファイルだけが記録される）
+User=fhashes
+# リポジトリを clone した場所。設定と状態は、その中の config/ と data/ に置かれる
+ExecStart=/home/fhashes/fhashes/bin/fhashes record
+Nice=19
+# ディスクの読み書きを後回しにする（効くのはディスクのスケジューラーが BFQ の場合だけ。mq-deadline / none では無視される）
+IOSchedulingClass=idle
+# すべてのファイルを読めるようにする場合は、次の行を有効にする（root で動かす場合は不要）
+#AmbientCapabilities=CAP_DAC_READ_SEARCH
+
+# 保護の設定（任意）。fhashes が書き込むのは data/ だけなので、ほかの場所への書き込みを禁じられる。
+# 使う場合は、ReadWritePaths= を clone した場所の data/ に合わせる
+#NoNewPrivileges=yes
+#PrivateTmp=yes
+#ProtectSystem=strict
+#ReadWritePaths=/home/fhashes/fhashes/data

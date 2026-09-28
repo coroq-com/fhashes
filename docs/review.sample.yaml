@@ -1,0 +1,17 @@
+# 調べる側の設定。config/review.yaml に置く（--config か環境変数 FHASHES_REVIEW_CONFIG で変更可）。
+# 相対パスは、この設定ファイルのあるディレクトリが基準。
+
+cache_dir: ../data/cache         # ダウンロードしたスナップショットのキャッシュ（fhashes clean で消せる）
+
+rclone_config: rclone.conf       # rclone の設定ファイル（相対パスはこの設定ファイルのある場所が基準）。省略すると rclone の既定の場所
+# rclone_options: []             # rclone に渡す追加のオプション（ふつうは不要）
+# rclone: rclone                 # rclone のコマンドのパス
+
+# 調べるホストと、そのスナップショットを置いているストレージ（必須）。
+# 場所には、記録する側の upload.remote と同じ場所を、読み取り専用の鍵の rclone の設定で書く。
+# 場所の直下にあるファイルのうち、ファイル名のホスト名が一致するものを使う（サブディレクトリは見ない）。
+# ここに書いたホストは status にすべて表示され、スナップショットが 1 つもなければ問題として報告される。
+hosts:
+  web1: "gcs-fhashes-ro:fhashes-snapshots/web1"
+  web2: "gcs-fhashes-ro:fhashes-snapshots/web2"
+  db1:  "azure-fhashes-ro:fhashes-snapshots/db1"

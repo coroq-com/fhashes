@@ -1,0 +1,12 @@
+[Unit]
+Description=fhashes: 毎時の記録
+
+[Timer]
+OnCalendar=hourly
+# 多数のホストが同時に送らないよう、0〜5 分ずらす。ずらす量はホストごとに固定する（毎回の間隔がちょうど 1 時間になる。systemd 247 以降）
+RandomizedDelaySec=300
+FixedRandomDelay=true
+Persistent=true
+
+[Install]
+WantedBy=timers.target
