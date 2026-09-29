@@ -36,7 +36,7 @@ Web システムのサーバーのファイルのハッシュを定期的に記�
 
 ## 必要なもの
 
-- Python 3.9 以上と PyYAML（`apt install python3-yaml` / `dnf install python3-pyyaml`）。pip は使いません。
+- Python 3.6 以上と PyYAML（`apt install python3-yaml` / `dnf install python3-pyyaml`）。pip は使いません。
 - rclone **1.61 以降**（apt / dnf で入るものは古いことがあるので、[rclone.org](https://rclone.org/downloads/) の単体バイナリを勧めます）。送り先の設定（下の「ストレージ」）は事前に済ませておきます。rclone の設定ファイルは `config/rclone.conf` に置くことを勧めます。
 
 ## コマンド
@@ -283,6 +283,8 @@ python3 -m unittest discover -s tests
 ```
 
 テスト用のファイルは一時ディレクトリ（`/tmp/fhashes-test` など。環境変数 `FHASHES_TEST_DIR` で変更可）の下に作られ、終了時に消えます。rclone が見つからない場合、rclone を使うテストはスキップします（`FHASHES_TEST_RCLONE` で rclone の場所を指定できます）。
+
+Python 3.6 で動くことは、Docker の `python:3.6-slim` の中で（一般ユーザーとして、PyYAML と rclone の単体バイナリを入れて）同じテストを流して確かめています。root で流すと、読み取りエラーのテストが失敗します（root はどのファイルも読めるため）。
 
 参考（開発環境での計測。1 つのディレクトリに 15 万個の空ファイル）: record は 1 回目約 9 秒、2 回目以降約 8 秒、メモリ約 70MB。review（記録 3 件）は約 5 秒、メモリ約 20MB（rclone を除く）。
 

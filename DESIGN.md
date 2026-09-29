@@ -467,7 +467,7 @@ tests/
   test_end_to_end.py       # 記録する側が作ったものを、調べる側が読めること
 ```
 
-- Python 3.9 以上（監視対象の最古は 3.9）。標準ライブラリと PyYAML（`python3-yaml` / `python3-pyyaml` を apt や dnf で入れる）だけを使う。
+- Python 3.6 以上（CentOS 7、RHEL 8 のシステムの Python、Ubuntu 18.04 などの古いサーバーでも動かすため）。3.7 以降の機能（`datetime.fromisoformat`、`add_subparsers(required=True)`、テストの `call.args` など）は使わない。標準ライブラリと PyYAML（`python3-yaml` / `python3-pyyaml` を apt や dnf で入れる）だけを使う。
 - 監視対象での導入: rclone の準備（事前）→ このリポジトリを clone → `config/record.yaml` を書く → systemd のタイマーを有効にする。
 - 置き場所についての注意:
   - `git clean -fdx` をすると `data/` が消え、送れていないスナップショットも失われる。更新は `git pull` で行う。
@@ -488,7 +488,7 @@ tests/
 
 **実機での確認**
 - S3・Azure Blob の書き込み専用の鍵で、rclone の送信が成功するか（送信前後の確認で失敗しないか、追加オプションで足りるか）。GCS は確認済み（§7）。README の `aws` / `az` のコマンドも実行していない。
-- Python 3.9 と aarch64 の実機。開発環境（Python 3.10、x86_64）でしか試していない。
+- aarch64 の実機。テストは、開発環境（Python 3.10、x86_64）と、Docker の `python:3.6-slim`（Python 3.6.15）で流している。
 - 実際のサーバーでの負荷（10 万ファイル・各 2KB の試験データでしか測っていない）。
 - マウントポイントの走査（root 権限が要るため、テストしていない）。
 

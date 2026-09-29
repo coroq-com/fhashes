@@ -16,7 +16,8 @@ from fhashes import config
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fhashes", description="ファイル改ざんの記録と調査")
     parser.add_argument("-v", "--verbose", action="store_true", help="詳しいログを出す")
-    sub = parser.add_subparsers(dest="command", required=True)
+    # required=True は Python 3.7 からなので使わない（コマンドがないときは main で確かめる）
+    sub = parser.add_subparsers(dest="command")
 
     record_help = "設定ファイル（既定: 環境変数 FHASHES_RECORD_CONFIG か <リポジトリ>/config/record.yaml）"
     review_help = "設定ファイル（既定: 環境変数 FHASHES_REVIEW_CONFIG か <リポジトリ>/config/review.yaml）"
@@ -53,7 +54,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not args.command:
+        parser.error("コマンドを指定してください（record / status / review / clean）")
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",

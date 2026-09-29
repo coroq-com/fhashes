@@ -44,7 +44,7 @@ class RecordTestBase(unittest.TestCase):
         conf = config.load_record_config(self.config_path)
         with mock.patch.object(walker, "hash_file", wraps=walker.hash_file) as hash_file:
             path = recorder.record(conf)
-        read = {call.args[0][len(self.data):] for call in hash_file.call_args_list}
+        read = {call[0][0][len(self.data):] for call in hash_file.call_args_list}  # call.args は Python 3.8 から
         summary = snapshot.read_summary(path)
         rows = {}
         for row in snapshot.iter_rows(path):
