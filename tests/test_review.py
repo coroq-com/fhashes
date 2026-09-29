@@ -6,11 +6,13 @@
 
 import gzip
 import io
+import logging
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import shutil
 import sys
 import unittest
+from unittest import mock
 from contextlib import redirect_stderr, redirect_stdout
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -223,7 +225,7 @@ class AnalysisTest(ReviewTestBase):
         self.assertIn("started_at", self.analyze()["snapshots"][1]["problem"])
         code, out = self.cli("review", "web1", "--from", "2026-09-01", "--to", "2026-09-01")
         self.assertEqual(code, 1)
-        self.assertIn("✗ 不正なスナップショット", out)
+        self.assertIn("不正な記録: web1-20260901T020000Z-00000002.ndjson.gz: ", out)
 
     def test_bad_row_is_reported_not_crashing(self):
         self.make_snapshot(1, t(1), [("/app/a", "h1")])
@@ -251,8 +253,46 @@ class AnalysisTest(ReviewTestBase):
         self.assertEqual([s["seq"] for s in result["snapshots"]], [4, 5, 6, 7])
         cached = []
         for root, dirs, files in os.walk(self.conf["cache_dir"]):
-            cached.extend(files)
+            cached.extend(name for name in files if name.endswith(snapshot.FILE_SUFFIX))
         self.assertEqual(len(cached), 4)
+
+    def test_verification_result_is_reused(self):
+        self.make_snapshot(1, t(1), [("/app/a", "h1")])
+        self.make_snapshot(2, t(2), [("/app/a", "h2")])
+        first = self.analyze()
+        # 2 回目は、保存した検証の結果を使う（展開しない）
+        with mock.patch.object(snapshot, "read_summary", side_effect=AssertionError("展開した")):
+            second = self.analyze()
+        self.assertEqual([s["sha256"] for s in second["snapshots"]], [s["sha256"] for s in first["snapshots"]])
+        self.assertEqual(len(second["changes"]), 1)
+
+    def test_verification_result_is_not_used_when_file_changed(self):
+        self.make_snapshot(1, t(1), [("/app/a", "h1")])
+        self.analyze()
+        entry = storage.list_snapshots(self.conf, "web1")[0]
+        local = storage.cache_path(self.conf, entry)
+        os.utime(local, ns=(0, 12345))  # キャッシュのファイルが変わった（更新時刻が違う）
+        with mock.patch.object(snapshot, "read_summary", wraps=snapshot.read_summary) as read_summary:
+            self.analyze()
+        self.assertEqual(read_summary.call_count, 1)   # 検証し直した
+        # 壊れた結果のファイルは無視して、検証し直す
+        with open(storage.summary_path(local), "w") as f:
+            f.write("{broken")
+        with mock.patch.object(snapshot, "read_summary", wraps=snapshot.read_summary) as read_summary:
+            self.analyze()
+        self.assertEqual(read_summary.call_count, 1)
+
+    def test_invalid_result_is_also_reused(self):
+        self.make_snapshot(1, t(1), [("/app/a", "h1")])
+        path = self.make_snapshot(2, t(2), [("/app/a", "h2")])
+        with open(path, "rb") as f:
+            data = f.read()
+        with open(path, "wb") as f:
+            f.write(data[: len(data) // 2])  # 途中で切れた記録
+        problem = self.analyze()["snapshots"][1]["problem"]
+        self.assertIsNotNone(problem)
+        with mock.patch.object(snapshot, "read_summary", side_effect=AssertionError("展開した")):
+            self.assertEqual(self.analyze()["snapshots"][1]["problem"], problem)
 
     def test_cache_is_reused_and_cleaned(self):
         self.make_snapshot(1, t(1), [("/app/a", "h1")])
@@ -305,18 +345,17 @@ class ReportTest(ReviewTestBase):
             code, out = self.cli("review", "web1", "--from", "2026-09-01T01:30Z", "--to", "2026-09-01T01:40Z",
                                  "--format", "csv")
             self.assertIn("/app/a", out)
-            # 表では JST で表示し、どのタイムゾーンかを書く
+            # 表では JST で表示する
             code, out = self.cli("review", "web1", "--from", "2026-09-01T01:30Z", "--to", "2026-09-01T01:40Z")
             self.assertIn("2026-09-01 11:01:00", out)
-            self.assertIn("JST（+09:00）", out)
 
     def test_period_can_be_omitted(self):
-        # 全期間: 最初のスナップショットから最新のものまで。端がないことを問題にしない
+        # 全期間: 最初の記録から最新の記録まで。端がないことを問題にしない
         code, out = self.cli("review", "web1")
         self.assertEqual(code, 0, out)
-        self.assertIn("調査期間: 最初のスナップショット 〜 最新のスナップショット", out)
-        self.assertIn("✓ 調べた範囲の始まり: 最初のスナップショット 2026-09-01 01:00:00（seq 1）", out)
-        self.assertIn("✓ 調べた範囲の終わり: 最新のスナップショット 2026-09-01 07:00:00（seq 4。", out)
+        self.assertIn("調査期間: 最初の記録 - 最新の記録", out)
+        self.assertIn("最初の記録: 2026-09-01 01:00:00\n", out)
+        self.assertIn("最新の記録: 2026-09-01 07:00:00\n", out)
         self.assertIn("/app/a", out)
         self.assertIn("/app/b", out)
         # --from だけ: その時刻から最新まで（a の変更期間 01:00〜02:01 は含まない）
@@ -330,22 +369,30 @@ class ReportTest(ReviewTestBase):
         self.assertIn("/app/a", out)
         self.assertNotIn("/app/b", out)
 
-    def test_review_reports_irregular_interval(self):
-        # 間隔の乱れは報告するが、深刻な異常とはみなさない
-        code, out = self.cli("review", "web1", "--from", "2026-09-01 03:30", "--to", "2026-09-01 06:30")
+    def test_review_shows_record_count_and_intervals(self):
+        # 間隔は判定せず、件数・中央値・最大値（とその場所）を出す。終了コードには影響しない
+        code, out = self.cli("review", "web1")
         self.assertEqual(code, 0, out)
-        self.assertIn("! 記録の間隔の乱れ: 2026-09-01 03:00:00 〜 2026-09-01 07:00:00", out)
-        self.assertIn("普段は約 60 分", out)
-        self.assertIn("/app/b", out)
-        self.make_snapshot(5, t(8), [("/app/a", "h2"), ("/app/b", "h2")])
-        code, out = self.cli("review", "web1", "--from", "2026-09-01 07:10", "--to", "2026-09-01 07:50")
-        self.assertIn("✓ 記録の間隔: 乱れなし（普段は約 60 分）", out)
+        self.assertIn("記録の件数: 4\n", out)     # 1, 2, 3, 7 時
+        self.assertIn("記録の間隔: 中央値 60 分、最大値 4.0 時間（2026-09-01 03:00:00 - 2026-09-01 07:00:00）", out)
 
-    def test_interval_is_not_checked_with_few_snapshots(self):
+    def test_interval_needs_two_records(self):
         self.make_snapshot(1, t(1), [("/app/a", "h1")], host="db1")
-        self.make_snapshot(2, t(5), [("/app/a", "h1")], host="db1")
-        code, out = self.cli("review", "db1", "--from", "2026-09-01", "--to", "2026-09-02")
-        self.assertIn("記録の数が少ないため", out)
+        code, out = self.cli("review", "db1")
+        self.assertIn("記録の件数: 1\n", out)
+        self.assertNotIn("記録の間隔", out)
+
+    def test_review_shows_what_happened_to_the_chain(self):
+        # 仕組み（ハッシュチェーン）ではなく、起きていること（欠落・不一致・やり直し）として出す。通し番号は出さない
+        self.make_snapshot(7, t(9), [("/app/a", "h2"), ("/app/b", "h2")], prev_sha="1" * 64)     # 5, 6 が届いていない
+        self.make_snapshot(8, t(10), [("/app/a", "h2"), ("/app/b", "h2")], prev_sha="2" * 64)    # 書き換えの疑い
+        self.make_snapshot(1, t(11), [("/app/a", "h2"), ("/app/b", "h2")], prev_sha=None)        # 状態ファイルが失われた
+        code, out = self.cli("review", "web1", "--from", "2026-09-01 07:30")
+        self.assertEqual(code, 1)
+        self.assertIn("記録の欠落: 2 件（2026-09-01 07:00:00 - 2026-09-01 09:00:00）", out)
+        self.assertIn("記録の不一致: 2026-09-01 10:00:00", out)
+        self.assertIn("記録のやり直し: 2026-09-01 11:00:00", out)
+        self.assertNotIn("seq", out)
 
     def test_review_problem_sets_exit_code_even_in_csv(self):
         self.make_snapshot(5, t(8), [("/app/a", "h2"), ("/app/b", "h2")], prev_sha="0" * 64)
@@ -353,16 +400,54 @@ class ReportTest(ReviewTestBase):
                              "--format", "csv")
         self.assertEqual(code, 1)
 
+    def test_review_writes_nothing_to_stderr_when_not_a_terminal(self):
+        # 進み具合は端末のときだけ出す。INFO のログも出さない（-v のときの DEBUG だけ）
+        records = []
+        handler = logging.Handler()
+        handler.emit = records.append
+        logger = logging.getLogger("fhashes")
+        logger.addHandler(handler)
+        old_level = logger.level
+        logger.setLevel(logging.INFO)
+        try:
+            err = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(err):
+                code = cli.main(["review", "--config", self.config_path, "web1"])
+                cli.main(["status", "--config", self.config_path])
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(old_level)
+        self.assertEqual(code, 0)
+        self.assertEqual(err.getvalue(), "")
+        self.assertEqual([r.getMessage() for r in records], [])
+
     def test_review_clean_period(self):
         code, out = self.cli("review", "web1", "--from", "2026-09-01 02:10", "--to", "2026-09-01 02:50")
         self.assertEqual(code, 0, out)
-        self.assertIn("該当する変化はありません", out)
-        self.assertIn("説明のつかない変更はありません", out)
+        self.assertIn("[変化の履歴]\n変化なし\n", out)
+        for item in ("記録の欠落", "記録の不一致", "記録のやり直し", "不正な記録", "監視範囲の変更", "読み取りエラー"):
+            self.assertIn(item + ": なし\n", out)   # 問題のない項目も 1 行ずつ出す
+        # 変化の履歴の後に監視の状況を出す（変化が多くても、監視の状況が最後に目に入るように）
+        self.assertLess(out.index("[変化の履歴]"), out.index("[監視の状況]"))
+
+    def test_exit_code_of_monitoring_items(self):
+        # 監視範囲の変更は注意だけで、終了コードは 0
+        self.make_snapshot(5, t(8), [("/app/a", "h2"), ("/app/b", "h2")],
+                           scope={"include": ["/app/**", "/etc/x"], "exclude": []})
+        code, out = self.cli("review", "web1", "--from", "2026-09-01 07:30", "--to", "2026-09-01 07:40")
+        self.assertIn("監視範囲の変更: 2026-09-01 08:00:00\n", out)
+        self.assertEqual(code, 0, out)
+        # 読み取りエラーは問題で、終了コードは 1
+        self.make_snapshot(6, t(9), [("/app/a", None, "file"), ("/app/b", "h2")],
+                           scope={"include": ["/app/**", "/etc/x"], "exclude": []})
+        code, out = self.cli("review", "web1", "--from", "2026-09-01 08:30", "--to", "2026-09-01 08:40")
+        self.assertIn("読み取りエラー: 記録 1 件、最大 1 ファイル（2026-09-01 09:00:00）", out)
+        self.assertEqual(code, 1, out)
 
     def test_review_shows_still_error_files(self):
         self.make_snapshot(8, t(8), [("/app/a", None, "file"), ("/app/b", "h2")])
         code, out = self.cli("review", "web1", "--from", "2026-09-01 07:30", "--to", "2026-09-01 07:40")
-        self.assertIn("期間の終わりでもエラーのまま: 1 件", out)
+        self.assertIn("期間の終わりでもエラーのまま: 1 ファイル", out)
 
     def test_review_unknown_host(self):
         code, out = self.cli("review", "nohost", "--from", "2026-09-01", "--to", "2026-09-02")
@@ -372,17 +457,20 @@ class ReportTest(ReviewTestBase):
 
     def test_status(self):
         code, out = self.cli("status")
-        self.assertIn("web1", out)
-        self.assertIn("最新のスナップショットが普段の間隔より古い", out)
-        self.assertIn("db1", out)
-        self.assertIn("スナップショットがない", out)
+        self.assertRegex(out, r"db1 +- +- +- +- +- +記録なし")
         self.assertEqual(code, 1)   # db1 に 1 つも届いていない
-        self.make_snapshot(1, t(7), [("/app/a", "h1")], host="db1")
+        # 直近 24 時間の記録の間隔（中央値と最大値）。判定はしないので、空きがあっても終了コードは 0
+        now = datetime.now(timezone.utc)
+        for seq, hours_ago in enumerate([10, 9, 8, 4, 3], 1):
+            self.make_snapshot(seq, timeutil.to_utc_text(now - timedelta(hours=hours_ago)), [("/app/a", "h1")], host="db1")
         code, out = self.cli("status")
-        self.assertEqual(code, 0)   # 間隔の乱れだけなら問題にしない
+        self.assertIn("間隔の中央値  間隔の最大値", out)
+        self.assertRegex(out, r"db1 +\S+ \S+ +60 分 +4\.0 時間 +1 +0 +OK")
+        self.assertEqual(code, 0)
+        # 最新の記録の問題（ここでは不一致）は、状況に出して終了コード 1
         self.make_snapshot(5, t(8), [("/app/a", "h2"), ("/app/b", "h2")], prev_sha="0" * 64)
         code, out = self.cli("status")
-        self.assertIn("チェーン異常（broken）", out)
+        self.assertRegex(out, r"web1 .*記録の不一致")
         self.assertEqual(code, 1)
 
 

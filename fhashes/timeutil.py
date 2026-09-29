@@ -49,14 +49,6 @@ def format_local(utc_text) -> str:
     return parse_utc(utc_text).astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def local_zone_label(utc_text=None) -> str:
-    """表示に使っているタイムゾーンの説明（例: "JST（+09:00）"）。utc_text の時点での値（省略時は今）。"""
-    dt = parse_utc(utc_text) if utc_text else datetime.now(timezone.utc)
-    local = dt.astimezone()
-    offset = local.strftime("%z")
-    return "%s（%s:%s）" % (local.tzname(), offset[:3], offset[3:])
-
-
 def parse_user_time(text: str, end_of_range: bool = False) -> str:
     """コマンドで指定された日時を UTC の文字列にする。
 

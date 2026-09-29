@@ -215,25 +215,45 @@ def file_sha256(path: str) -> str:
 # 読み込み
 # ----------------------------------------------------------------------
 
+SUMMARY_CHUNK = 1024 * 1024   # read_summary で一度に展開する大きさ
+SUMMARY_TAIL = 64 * 1024      # 最後の行を探すために残しておく末尾の大きさ（終端の行はこれより十分短い）
+
+
 def read_summary(path: str) -> dict:
     """ヘッダーと終端だけを読んで、形式を確かめる（ファイル行の JSON は解釈しない）。
 
     返り値: {"header": dict, "end": dict}。形式がおかしければ SnapshotFormatError。
+    1 行ずつ読まずに、まとめて展開して改行の数を数える（変化がない記録も毎回検証するので、速さが効く）。
+    覚えておくのは最初の行と末尾だけなので、メモリはファイル数に比例しない。
     """
-    # 1 行ずつ読んで、最初の行と最後の行と行数だけを覚える（丸ごと読むと、ファイル数に比例してメモリを使う）
-    first = last = None
-    line_count = 0
+    head = b""        # 最初の改行が見つかるまでの先頭
+    first = None      # 最初の行（ヘッダー）
+    tail = b""        # 末尾（最後の行を探すため）
+    newlines = 0
     try:
         with gzip.open(path, "rb") as f:
-            for line in f:
+            while True:
+                chunk = f.read(SUMMARY_CHUNK)
+                if not chunk:
+                    break
                 if first is None:
-                    first = line
-                last = line
-                line_count += 1
+                    head += chunk
+                    if b"\n" in head:
+                        first = head[:head.index(b"\n")]
+                        head = b""
+                newlines += chunk.count(b"\n")
+                tail = chunk[-SUMMARY_TAIL:] if len(chunk) >= SUMMARY_TAIL else (tail + chunk)[-SUMMARY_TAIL:]
     except (OSError, EOFError) as e:
         raise SnapshotFormatError("gzip として読めません: " + str(e))
+    if first is None:
+        first = head  # 改行が 1 つもない
+    # 行数: 最後が改行で終わっていなければ、最後の行も 1 行と数える
+    ends_with_newline = tail.endswith(b"\n")
+    line_count = newlines + (0 if ends_with_newline or not tail else 1)
     if line_count < 2:
         raise SnapshotFormatError("行が足りません")
+    body = tail[:-1] if ends_with_newline else tail
+    last = body[body.rfind(b"\n") + 1:]
     header = parse_json_line(first, "ヘッダー")
     end = parse_json_line(last, "終端")
     check_header(header)

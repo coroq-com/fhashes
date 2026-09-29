@@ -260,7 +260,7 @@ def recover_unmoved_snapshot(tmp_dir: str, outbox_dir: str, prev_snapshot_sha256
             os.makedirs(outbox_dir, exist_ok=True)
             os.rename(path, os.path.join(outbox_dir, name))
             fsync_dir(outbox_dir)
-            log.warning("前回、outbox に移す前に止まったスナップショットを移しました: %s", name)
+            log.warning("前回、outbox に移す前に止まった記録を移しました: %s", name)
             return
 
 

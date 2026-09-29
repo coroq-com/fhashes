@@ -10,16 +10,12 @@
   still_error : 読み取りエラーのままのファイル。エラーになる前の最後に分かっている状態を覚えておく
 """
 
-import logging
 import os
 
 from fhashes import snapshot
 from fhashes.patterns import Scope
+from fhashes.progress import Progress
 from fhashes.review import storage
-
-log = logging.getLogger("fhashes")
-
-PROGRESS_EVERY = 500  # この数ごとに、検証と比較の進み具合を出す
 
 
 # ----------------------------------------------------------------------
@@ -50,7 +46,7 @@ def select_range(entries: list, since: str, until: str) -> list:
 # 1 ホスト分の解析
 # ----------------------------------------------------------------------
 
-def analyze_host(conf: dict, entries: list) -> dict:
+def analyze_host(conf: dict, entries: list, show_progress: bool = True) -> dict:
     """entries（古い順）のスナップショットを検証し、隣り合うものを比べる。
 
     返り値:
@@ -58,14 +54,21 @@ def analyze_host(conf: dict, entries: list) -> dict:
       changes   : 見つかった変化（dict のリスト）
       still_error_count : 最後の時点でエラーのままのファイルの数
     """
-    storage.download(conf, entries)
+    storage.download(conf, entries, show_progress)
+    progress = Progress("記録の検証", len(entries) if show_progress else 0)
+    try:
+        return check_and_compare(conf, entries, progress)
+    finally:
+        progress.close()
+
+
+def check_and_compare(conf: dict, entries: list, progress: Progress) -> dict:
     snapshots = []
     changes = []
     still_error = {}
     prev = None
     for index, entry in enumerate(entries, 1):
-        if index % PROGRESS_EVERY == 0:
-            log.info("検証と比較: %d / %d", index, len(entries))
+        progress.update(index)
         info = load_snapshot(conf, entry, prev)
         snapshots.append(info)
         if info["problem"] is not None:
@@ -99,13 +102,17 @@ def load_snapshot(conf: dict, entry: dict, prev) -> dict:
         "scope_changed": False,
     }
     try:
-        summary = snapshot.read_summary(info["local_path"])
-        header = summary["header"]
-        end = summary["end"]
-        if header["host"] != entry["host"] or header["seq"] != entry["seq"]:
-            raise snapshot.SnapshotFormatError("ファイル名とヘッダーのホスト名・通し番号が合いません")
-    except (snapshot.SnapshotFormatError, OSError) as e:
+        summary = verify_file(info["local_path"])
+    except OSError as e:
         info["problem"] = str(e)
+        return info
+    if summary["problem"] is not None:
+        info["problem"] = summary["problem"]
+        return info
+    header = summary["header"]
+    end = summary["end"]
+    if header["host"] != entry["host"] or header["seq"] != entry["seq"]:
+        info["problem"] = "ファイル名とヘッダーのホスト名・通し番号が合いません"
         return info
 
     info.update({
@@ -116,11 +123,32 @@ def load_snapshot(conf: dict, entry: dict, prev) -> dict:
         "scope_sha256": header["scope_sha256"],
         "content_sha256": end["content_sha256"],
         "scope": {"include": header["include"], "exclude": header["exclude"]},
-        "sha256": snapshot.file_sha256(info["local_path"]),
+        "sha256": summary["sha256"],
     })
     info["chain"] = check_chain(prev, header)
+    # 欠けている記録の数（gap のとき）。表示では通し番号を見せず、件数で伝える
+    info["missing"] = header["seq"] - prev["seq"] - 1 if info["chain"] == "gap" else 0
     info["scope_changed"] = prev is not None and prev["scope_sha256"] != header["scope_sha256"]
     return info
+
+
+def verify_file(local_path: str) -> dict:
+    """記録のファイルを検証する。前に検証した結果が使えれば、それを使う（展開しなくて済む）。
+
+    返り値: {"header", "end", "sha256", "problem"}。不正なら header / end は None で、problem に理由。
+    """
+    st = os.stat(local_path)
+    result = storage.load_summary(local_path, st)
+    if result is not None:
+        return result
+    try:
+        summary = snapshot.read_summary(local_path)
+        result = {"header": summary["header"], "end": summary["end"], "problem": None}
+    except snapshot.SnapshotFormatError as e:
+        result = {"header": None, "end": None, "problem": str(e)}
+    result["sha256"] = snapshot.file_sha256(local_path)
+    storage.save_summary(local_path, st, result)
+    return result
 
 
 def check_chain(prev, header: dict) -> str:

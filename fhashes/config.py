@@ -107,7 +107,7 @@ def load_record_config(path: str) -> dict:
     conf["state_dir"] = resolve_path(path, conf["state_dir"])
     if not conf["host"]:
         # 自動でホスト名を使うと、ホスト名の変更や重複に気付きにくいので、必ず書いてもらう
-        raise ConfigError(path + ": host を書いてください（スナップショットに書くホスト名）")
+        raise ConfigError(path + ": host を書いてください（記録に書くホスト名）")
     if not isinstance(conf["host"], str) or not snapshot.HOST_NAME_REGEX.match(conf["host"]):
         raise ConfigError(path + ": host に使えない文字があります: " + conf["host"])
 

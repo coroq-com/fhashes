@@ -22,12 +22,12 @@ def build_parser() -> argparse.ArgumentParser:
     review_help = "設定ファイル（既定: 環境変数 FHASHES_REVIEW_CONFIG か <リポジトリ>/config/review.yaml）"
 
     # 記録する側
-    p = sub.add_parser("record", help="[記録] ファイルを調べてスナップショットを書き、送信待ちのスナップショットと一緒にストレージへ送る")
+    p = sub.add_parser("record", help="[記録] ファイルを調べて記録を作り、送信待ちの記録と一緒にストレージへ送る")
     p.add_argument("--config", help=record_help)
-    p.add_argument("--no-upload", action="store_true", help="スナップショットを書くだけで送らない")
+    p.add_argument("--no-upload", action="store_true", help="記録を作るだけで送らない")
 
     # 調べる側
-    p = sub.add_parser("status", help="[調査] ホストごとの最新のスナップショットと、直近の間隔の乱れ・異常を表示する")
+    p = sub.add_parser("status", help="[調査] ホストごとの最新の記録と異常を表示する")
     p.add_argument("--config", help=review_help)
 
     p = sub.add_parser("review", help="[調査] 1 台のホストについて、期間内の変化と監視の状況を見直す")
@@ -36,9 +36,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--from", dest="since",
                    help="開始日時（例: 2026-09-20、'2026-09-20 10:00'、2026-09-20T10:00+09:00、2026-09-20T01:00Z）。"
                         "タイムゾーンを書かなければ実行環境のタイムゾーン（TZ）で解釈する。"
-                        "省くと最初のスナップショットから（全期間はダウンロードの量が多くなる）")
+                        "省くと最初の記録から（全期間はダウンロードの量が多くなる）")
     p.add_argument("--to", dest="until",
-                   help="終了日時（形式は --from と同じ。日付だけならその日を含む）。省くと最新のスナップショットまで")
+                   help="終了日時（形式は --from と同じ。日付だけならその日を含む）。省くと最新の記録まで")
     p.add_argument("--detected", action="store_true",
                    help="変化を「指定期間に検知したもの」で絞り込む（既定は「変更された可能性のある期間が重なるもの」）")
     p.add_argument("--path", action="append",
@@ -47,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--format", choices=["table", "csv", "json"], default="table",
                    help="出力形式（csv / json は変化だけを、時刻を UTC で出す）")
 
-    p = sub.add_parser("clean", help="[調査] ダウンロードしたスナップショットのキャッシュを消す")
+    p = sub.add_parser("clean", help="[調査] ダウンロードした記録のキャッシュを消す")
     p.add_argument("--config", help=review_help)
     return parser
 
@@ -87,7 +87,7 @@ def record_command(args) -> int:
         logging.info("ほかの fhashes record が実行中なので、今回は何もしません")
         return 0
     except walker.MissingRootError as e:
-        logging.error("記録に失敗しました（スナップショットは作っていません）: %s", e)
+        logging.error("記録に失敗しました（記録は作っていません）: %s", e)
         recorded = False
     if args.no_upload:
         return 0 if recorded else 1

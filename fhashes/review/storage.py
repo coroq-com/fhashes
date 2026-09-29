@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 
 from fhashes import rclone, snapshot
+from fhashes.progress import Progress
 
 log = logging.getLogger("fhashes")
 
@@ -93,22 +94,28 @@ def is_cached(conf: dict, entry: dict) -> bool:
     return os.path.exists(local) and os.path.getsize(local) == entry["size"]
 
 
-def download(conf: dict, entries: list) -> None:
+def download(conf: dict, entries: list, show_progress: bool = True) -> None:
     """entries のスナップショットを手元に用意する。キャッシュにあって大きさが合うものは取り直さない。
 
-    始める前に量を出す（全期間を調べると数 GB になることがあるので、中止するかどうかを判断できるように）。
+    進み具合には、最初から全体の量を出す（全期間を調べると数 GB になることがあるので、
+    中止するかどうかを判断できるように）。
     """
     missing = [e for e in entries if not is_cached(conf, e)]
-    log.info("スナップショット %d 個（%s。うち未取得 %d 個・%s）を使います。中止するなら Ctrl-C",
-             len(entries), size_text(sum(e["size"] for e in entries)),
-             len(missing), size_text(sum(e["size"] for e in missing)))
+    total_size = sum(e["size"] for e in missing)
+    log.debug("記録 %d 件のうち、未取得 %d 件（%s）を取得します", len(entries), len(missing), size_text(total_size))
+    progress = Progress("記録の取得", len(missing) if show_progress else 0)
     done = 0
-    for start in range(0, len(missing), DOWNLOAD_BATCH):
-        batch = missing[start:start + DOWNLOAD_BATCH]
-        download_batch(conf, batch)
-        done += len(batch)
-        if len(missing) > DOWNLOAD_BATCH:
-            log.info("ダウンロード: %d / %d", done, len(missing))
+    done_size = 0
+    try:
+        progress.update(0, size_text(0) + " / " + size_text(total_size), force=True)
+        for start in range(0, len(missing), DOWNLOAD_BATCH):
+            batch = missing[start:start + DOWNLOAD_BATCH]
+            download_batch(conf, batch)
+            done += len(batch)
+            done_size += sum(e["size"] for e in batch)
+            progress.update(done, size_text(done_size) + " / " + size_text(total_size))
+    finally:
+        progress.close()
 
 
 def download_batch(conf: dict, batch: list) -> None:
@@ -131,6 +138,48 @@ def download_batch(conf: dict, batch: list) -> None:
         for entry in entries:
             if not os.path.exists(cache_path(conf, entry)):
                 raise StorageError(remote + ": ダウンロードできませんでした: " + entry["name"])
+
+
+# ----------------------------------------------------------------------
+# 検証の結果のキャッシュ
+#   記録を検証した結果（ヘッダー、終端、圧縮されたファイルのハッシュ、不正ならその理由）を、
+#   キャッシュの記録の隣に <名前>.summary.json として残す。記録は書き換えられない（WORM）ので、
+#   同じファイルなら結果は変わらない。2 回目以降は展開せずに済む。
+#   使うのは、記録のファイルの大きさと更新時刻が保存したときと同じで、SUMMARY_VERSION も同じ場合だけ。
+# ----------------------------------------------------------------------
+
+SUMMARY_VERSION = 1  # 検証の仕方を変えたら上げる（古い結果を使わないため）
+
+
+def summary_path(local_path: str) -> str:
+    return local_path + ".summary.json"
+
+
+def load_summary(local_path: str, st: os.stat_result):
+    """保存した検証の結果を返す。使えなければ None。"""
+    try:
+        with open(summary_path(local_path), encoding="utf-8") as f:
+            data = json.load(f)
+        if (data["summary_version"] == SUMMARY_VERSION
+                and data["size"] == st.st_size and data["mtime_ns"] == st.st_mtime_ns):
+            return data["result"]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass  # ない、壊れている → 検証し直す
+    return None
+
+
+def save_summary(local_path: str, st: os.stat_result, result: dict) -> None:
+    """検証の結果を保存する。一時ファイルに書いてから名前を変える（途中で止まっても壊れた結果を残さない）。"""
+    data = {"summary_version": SUMMARY_VERSION, "size": st.st_size, "mtime_ns": st.st_mtime_ns, "result": result}
+    path = summary_path(local_path)
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=os.path.dirname(path),
+                                         suffix=".tmp", delete=False) as f:
+            json.dump(data, f, ensure_ascii=False)
+            tmp = f.name
+        os.replace(tmp, path)
+    except OSError as e:
+        log.debug("検証の結果を保存できませんでした（次回また検証します）: %s: %s", path, e)
 
 
 def clean_cache(conf: dict) -> int:

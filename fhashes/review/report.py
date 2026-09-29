@@ -7,19 +7,18 @@ import unicodedata
 from datetime import timedelta
 
 from fhashes import config, patterns, timeutil
+from fhashes.progress import Progress
 from fhashes.review import analysis, storage
 
 CHANGE_TYPES = ("added", "modified", "deleted")
 # ハッシュチェーンの異常（ok と first は異常ではないので表示しない）
+# ハッシュチェーンで見つかる異常。表示の見出しは仕組み（ハッシュチェーン）ではなく、起きていることにする
 CHAIN_PROBLEMS = {
-    "restart": "状態ファイルが失われた後の最初のスナップショット",
-    "gap": "直前のスナップショットが届いていない（通し番号が飛んでいる）",
-    "broken": "直前のスナップショットとハッシュが合わない（書き換え・すり替え・巻き戻しの疑い）",
+    "gap": "記録の欠落",
+    "broken": "記録の不一致",
+    "restart": "記録のやり直し",
 }
-STATUS_RECENT_HOURS = 24    # status で間隔の乱れを調べる範囲
-TYPICAL_SAMPLE = 48         # 普段の記録の間隔の推定に使う間隔の数（直近のもの）
-MIN_INTERVALS = 3           # 普段の間隔を推定するのに必要な間隔の数
-LONG_INTERVAL_RATIO = 1.5   # 普段の間隔のこの倍より空いたら「間隔の乱れ」とする
+STATUS_RECENT_HOURS = 24    # status で記録の間隔を調べる範囲
 
 
 # ----------------------------------------------------------------------
@@ -33,7 +32,8 @@ def display_width(text: str) -> int:
     return width
 
 
-def print_table(headers: list, rows: list, indent: str = "") -> None:
+def print_table(headers: list, rows: list, indent: str = "", right: tuple = ()) -> None:
+    """表を出す。right は右にそろえる列の番号（数の列）。"""
     widths = [display_width(h) for h in headers]
     for row in rows:
         for i, cell in enumerate(row):
@@ -42,10 +42,13 @@ def print_table(headers: list, rows: list, indent: str = "") -> None:
     def format_row(cells):
         parts = []
         for i, cell in enumerate(cells):
-            if i == len(cells) - 1:
+            padding = " " * (widths[i] - display_width(cell))
+            if i in right:
+                parts.append(padding + cell)
+            elif i == len(cells) - 1:
                 parts.append(cell)  # 最後の列（パスなど）は右を埋めない
             else:
-                parts.append(cell + " " * (widths[i] - display_width(cell)))
+                parts.append(cell + padding)
         return indent + "  ".join(parts)
 
     print(format_row(headers))
@@ -71,42 +74,35 @@ def duration_text(seconds: float) -> str:
 
 # ----------------------------------------------------------------------
 # 記録の間隔
-#   記録の間隔は設定せず、実際の記録の開始時刻（ストレージの一覧のファイル名の時刻）から
-#   「普段の間隔」を推定する。それより大きく空いたところを「間隔の乱れ」として報告するが、
-#   深刻な異常とはみなさない（判定や終了コードには影響させない）。
-#   空いた間の変更も、前後の記録を比べれば「その間のどこか」として見つかるため。
+#   間隔は設定に持たず、「乱れ」とも判定しない（閾値に根拠がないため）。実際の記録の開始時刻から
+#   数値を出し、人が判断する。空いた間の変更も、前後の記録を比べれば「その間のどこか」として見つかる。
 # ----------------------------------------------------------------------
 
-def typical_interval(start_times: list, until: str):
-    """記録の開始時刻（古い順）から、until のころの普段の間隔（間隔の中央値、秒）を推定する。
+def interval_stats(start_times: list):
+    """記録の開始時刻（古い順）から、間隔の中央値（秒）と、一番長い間隔の (始まり, 終わり) を求める。
 
-    until の後の最初の記録までのうち、直近 TYPICAL_SAMPLE 個の間隔を使う。数が少なければ None。
+    記録が 2 件未満なら None。平均ではなく中央値にするのは、大きな空きに引っ張られないため。
+    最大を出すのは、一番長く空いたところでは、変更の時期を狭められないため。
     """
-    end = 0
-    while end < len(start_times) and start_times[end] <= until:
-        end += 1
-    sample = start_times[max(0, end - TYPICAL_SAMPLE):end + 1]
-    intervals = []
-    for before, after in zip(sample, sample[1:]):
-        intervals.append(timeutil.seconds_between(before, after))
-    if len(intervals) < MIN_INTERVALS:
+    if len(start_times) < 2:
         return None
-    intervals.sort()
+    pairs = list(zip(start_times, start_times[1:]))
+    intervals = sorted(timeutil.seconds_between(a, b) for a, b in pairs)
     middle = len(intervals) // 2
-    if len(intervals) % 2 == 1:
-        return intervals[middle]
-    return (intervals[middle - 1] + intervals[middle]) / 2
+    median = intervals[middle] if len(intervals) % 2 else (intervals[middle - 1] + intervals[middle]) / 2
+    longest = max(pairs, key=lambda pair: timeutil.seconds_between(pair[0], pair[1]))
+    return median, longest
 
 
-def long_intervals(start_times: list, typical: float, since: str, until: str) -> list:
-    """普段の間隔の LONG_INTERVAL_RATIO 倍より空いたところのうち、[since, until) と重なるもの。"""
-    result = []
-    for before, after in zip(start_times, start_times[1:]):
-        seconds = timeutil.seconds_between(before, after)
-        if seconds > typical * LONG_INTERVAL_RATIO and after > since and before < until:
-            result.append({"from": before, "to": after, "seconds": seconds})
-    return result
-
+def interval_summary(start_times: list):
+    """review の「記録の間隔」の表示。記録が 2 件未満なら None。"""
+    stats = interval_stats(start_times)
+    if stats is None:
+        return None
+    median, longest = stats
+    return "中央値 %s、最大値 %s（%s - %s）" % (
+        duration_text(median), duration_text(timeutil.seconds_between(longest[0], longest[1])),
+        timeutil.format_local(longest[0]), timeutil.format_local(longest[1]))
 
 
 # --from / --to を省いたときの範囲の端。時刻の文字列どうしの大小比較にだけ使う（表示しない）
@@ -140,58 +136,57 @@ def analyze_host_period(conf: dict, host: str, since: str, until: str):
 # status
 # ----------------------------------------------------------------------
 
-def cmd_status(conf: dict, args) -> int:
-    """ホストごとの最新のスナップショットと、直近の間隔の乱れ・異常を表示する。
+def status_row(conf: dict, host: str, recent_from: str) -> tuple:
+    """status の 1 行分。(行, 問題があるか) を返す。"""
+    entries = storage.list_snapshots(conf, host)
+    if not entries:
+        return [host, "-", "-", "-", "-", "-", "記録なし"], True
+    times = [e["name_time"] for e in entries]
+    stats = interval_stats([t for t in times if t >= recent_from])
+    result = analysis.analyze_host(conf, entries[-2:], show_progress=False)
+    last = result["snapshots"][-1]
+    notes = []
+    if last["problem"] is not None:
+        notes.append("最新の記録が不正")
+    elif last["chain"] in CHAIN_PROBLEMS:
+        notes.append(CHAIN_PROBLEMS[last["chain"]])
+    elif last["errors"]:
+        notes.append("読み取りエラー")
+    row = [
+        host,
+        timeutil.format_local(entries[-1]["name_time"]),
+        duration_text(stats[0]) if stats else "-",
+        duration_text(timeutil.seconds_between(*stats[1])) if stats else "-",
+        "{:,}".format(last["files"]),
+        "{:,}".format(last["errors"]),
+        "、".join(notes) if notes else "OK",
+    ]
+    return row, bool(notes)
 
-    間隔はストレージの一覧（ファイル名の時刻）だけで調べる。
+
+def cmd_status(conf: dict, args) -> int:
+    """ホストごとの最新の記録と、直近 24 時間の記録の間隔、異常を表示する。
+
+    間隔はストレージの一覧（ファイル名の時刻）だけで調べる（判定はせず、中央値と最大を出す）。
     ハッシュチェーンと読み取りエラーは、最新の 2 つだけダウンロードして調べる。
-    問題（不正・チェーン異常・読み取りエラー）があれば終了コード 1。間隔の乱れは報告するだけ。
+    問題（記録がない・不正・記録の欠落などハッシュチェーンの異常・読み取りエラー）があれば終了コード 1。
     """
     now = timeutil.now_utc()
     recent_from = timeutil.to_utc_text(timeutil.parse_utc(now) - timedelta(hours=STATUS_RECENT_HOURS))
     table = []
     has_problem = False
-    for host in sorted(conf["hosts"]):
-        entries = storage.list_snapshots(conf, host)
-        if not entries:
-            has_problem = True
-            table.append([host, "", "", "", "", "0", "スナップショットがない"])
-            continue
-        times = [e["name_time"] for e in entries]
-        recent = [t for t in times if t >= recent_from]
-        typical = typical_interval(times, now)
-        result = analysis.analyze_host(conf, entries[-2:])
-        last = result["snapshots"][-1]
-        notes = []    # 深刻な異常
-        remarks = []  # 間隔の乱れ（報告するだけ）
-        age = timeutil.seconds_between(times[-1], now)
-        if typical is not None:
-            if age > typical * LONG_INTERVAL_RATIO:
-                remarks.append("最新のスナップショットが普段の間隔より古い")
-            if long_intervals(times, typical, recent_from, now):
-                remarks.append("直近 %d 時間に間隔の乱れあり" % STATUS_RECENT_HOURS)
-        if last["problem"] is not None:
-            notes.append("最新のスナップショットが不正")
-        elif last["chain"] in CHAIN_PROBLEMS:
-            notes.append("チェーン異常（" + last["chain"] + "）")
-        elif last["errors"]:
-            notes.append("読み取りエラーあり")
-        if notes:
-            has_problem = True
-        notes += ["（参考）" + r for r in remarks]
-        table.append([
-            host,
-            timeutil.format_local(entries[-1]["name_time"]),
-            duration_text(age),
-            str(last.get("files", "")),
-            str(last.get("errors", "")),
-            str(len(recent)),
-            "、".join(notes) if notes else "OK",
-        ])
-    print_table(["ホスト", "最新のスナップショット", "経過", "ファイル数", "エラー",
-                 "直近 %d 時間の数" % STATUS_RECENT_HOURS, "状況"], table)
-    print()
-    print("時刻の表示: " + timeutil.local_zone_label() + "（実行環境のタイムゾーン。TZ で変えられる）")
+    hosts = sorted(conf["hosts"])
+    progress = Progress("ホストの確認", len(hosts))
+    try:
+        for index, host in enumerate(hosts):
+            progress.update(index, host, force=True)
+            row, problem = status_row(conf, host, recent_from)
+            table.append(row)
+            has_problem = has_problem or problem
+    finally:
+        progress.close()
+    print_table(["ホスト", "最新の記録", "間隔の中央値", "間隔の最大値", "ファイル数", "エラー", "状況"], table,
+                right=(4, 5))
     return 1 if has_problem else 0
 
 
@@ -250,19 +245,16 @@ def change_label(change: dict) -> str:
 
 def print_changes_table(changes: list) -> None:
     if not changes:
-        print("該当する変化はありません")
+        print("変化なし")
         return
     table = []
     for change in changes:
-        table.append([
-            timeutil.format_local(change["changed_after"]),
-            timeutil.format_local(change["changed_before"]),
-            change_label(change),
-            change["path"],
-        ])
-    print_table(["この時点では元の状態", "この時点では新しい状態", "種別", "パス"], table)
+        # 変化したのは、この時期（範囲）のどこか
+        period = timeutil.format_local(change["changed_after"]) + " - " + timeutil.format_local(change["changed_before"])
+        table.append([period, change_label(change), change["path"]])
+    print_table(["時期", "変化", "パス"], table)
     print()
-    print(str(len(changes)) + " 件（変更されたのは、左 2 列の時刻の間のどこか）")
+    print("{:,} 件".format(len(changes)))
 
 
 def change_dict(change: dict) -> dict:
@@ -296,7 +288,8 @@ def monitoring_report(conf: dict, result: dict, since, until) -> tuple:
     """期間の監視の状況を調べる。(表示する行のリスト, 問題の名前のリスト) を返す。
 
     since / until は、--from / --to を省いた場合は None（最初のスナップショットから / 最新のものまで）。
-    行の先頭の記号: ✓ 問題なし / ✗ 問題あり / ! 注意（変化の見え方に影響する）
+    記号は付けない（「記録の欠落: 2 件」のように、値を見れば問題かどうか分かる）。
+    終了コード 1 になる問題は problems に加える（監視範囲の変更など、注意だけのものは加えない）。
     """
     snapshots = result["snapshots"]
     valid = [s for s in snapshots if s["problem"] is None]
@@ -306,25 +299,21 @@ def monitoring_report(conf: dict, result: dict, since, until) -> tuple:
     # 期間の直前・直後のスナップショット。端を省いた場合は、最初・最新のスナップショットが端になる
     if since is None:
         if valid:
-            lines.append("✓ 調べた範囲の始まり: 最初のスナップショット %s（seq %d）"
-                         % (timeutil.format_local(valid[0]["started_at"]), valid[0]["seq"]))
+            lines.append("最初の記録: %s" % timeutil.format_local(valid[0]["started_at"]))
     else:
         before = None
         for snap in valid:
             if snap["finished_at"] <= since:
                 before = snap
         if before is None:
-            problems.append("期間の開始前のスナップショットがない")
-            lines.append("✗ 期間の開始前のスナップショットがありません（開始時点の状態が分かりません）")
+            problems.append("期間の直前の記録なし")
+            lines.append("期間の直前の記録: なし")
         else:
-            lines.append("✓ 期間の直前のスナップショット: %s（seq %d）"
-                         % (timeutil.format_local(before["started_at"]), before["seq"]))
+            lines.append("期間の直前の記録: %s" % timeutil.format_local(before["started_at"]))
     if until is None:
         if valid:
             last = valid[-1]
-            lines.append("✓ 調べた範囲の終わり: 最新のスナップショット %s（seq %d。%s前）"
-                         % (timeutil.format_local(last["started_at"]), last["seq"],
-                            duration_text(timeutil.seconds_between(last["started_at"], timeutil.now_utc()))))
+            lines.append("最新の記録: %s" % timeutil.format_local(last["started_at"]))
     else:
         after = None
         for snap in valid:
@@ -332,68 +321,61 @@ def monitoring_report(conf: dict, result: dict, since, until) -> tuple:
                 after = snap
                 break
         if after is None:
-            problems.append("期間の終了後のスナップショットがない")
-            lines.append("✗ 期間の終了後のスナップショットがまだありません（終了時点の状態が分かりません）")
+            problems.append("期間の直後の記録なし")
+            lines.append("期間の直後の記録: なし")
         else:
-            lines.append("✓ 期間の直後のスナップショット: %s（seq %d）"
-                         % (timeutil.format_local(after["started_at"]), after["seq"]))
+            lines.append("期間の直後の記録: %s" % timeutil.format_local(after["started_at"]))
     if not valid:
-        problems.append("有効なスナップショットがない")
+        problems.append("有効な記録なし")
+        lines.append("有効な記録: なし")
 
-    # 記録の間隔（深刻な異常とはみなさず、報告するだけ）
-    low = since or OPEN_START
-    high = until or OPEN_END
-    times = [e["name_time"] for e in result["entries"]]
-    typical = typical_interval(times, high)
-    if typical is None:
-        lines.append("- 記録の間隔: 記録の数が少ないため、確かめていません")
-    else:
-        irregular = long_intervals(times, typical, low, high)
-        if irregular:
-            for g in irregular:
-                lines.append("! 記録の間隔の乱れ: %s 〜 %s（%s。普段は約 %s）。この間の変更は、前後の記録の間のどこかとしか分かりません"
-                             % (timeutil.format_local(g["from"]), timeutil.format_local(g["to"]),
-                                duration_text(g["seconds"]), duration_text(typical)))
-        else:
-            lines.append("✓ 記録の間隔: 乱れなし（普段は約 %s）" % duration_text(typical))
+    # 記録の間隔: 判定はせず、件数・中央値・最大（とその場所）を出す
+    lines.append("記録の件数: {:,}".format(len(valid)))
+    intervals = interval_summary([s["started_at"] for s in valid])
+    if intervals is not None:
+        lines.append("記録の間隔: " + intervals)
 
-    chain_bad = [s for s in valid if s["chain"] in CHAIN_PROBLEMS]
-    if chain_bad:
-        problems.append("ハッシュチェーンの異常")
-        for s in chain_bad:
-            lines.append("✗ ハッシュチェーン: seq %d（%s）: %s"
-                         % (s["seq"], timeutil.format_local(s["started_at"]), CHAIN_PROBLEMS[s["chain"]]))
-    else:
-        lines.append("✓ ハッシュチェーン: 正常")
+    # ハッシュチェーンの異常（欠落・不一致・やり直し）
+    for chain, title in CHAIN_PROBLEMS.items():
+        found = [(index, s) for index, s in enumerate(valid) if s["chain"] == chain]
+        if not found:
+            lines.append("%s: なし" % title)
+            continue
+        problems.append(title)
+        for index, s in found:
+            if chain == "gap":
+                lines.append("%s: %s 件（%s - %s）" % (title, "{:,}".format(s["missing"]),
+                             timeutil.format_local(valid[index - 1]["started_at"]), timeutil.format_local(s["started_at"])))
+            else:
+                lines.append("%s: %s" % (title, timeutil.format_local(s["started_at"])))
 
     invalid = [s for s in snapshots if s["problem"] is not None]
     if invalid:
-        problems.append("不正なスナップショット")
+        problems.append("不正な記録")
         for s in invalid:
-            lines.append("✗ 不正なスナップショット: %s: %s" % (s["name"], s["problem"]))
+            lines.append("不正な記録: %s: %s" % (s["name"], s["problem"]))
     else:
-        lines.append("✓ 不正なスナップショット: なし")
+        lines.append("不正な記録: なし")
 
     scope_changes = [s for s in valid if s["scope_changed"]]
     if scope_changes:
-        problems.append("監視範囲の変更")
+        # ふつうは設定を変えた結果（意図したもの）なので、問題とはみなさない
         for s in scope_changes:
-            lines.append("! 監視範囲の変更: %s（seq %d）。範囲に出入りしたファイルは変化として数えていません"
-                         % (timeutil.format_local(s["started_at"]), s["seq"]))
+            lines.append("監視範囲の変更: %s" % timeutil.format_local(s["started_at"]))
     else:
-        lines.append("✓ 監視範囲の変更: なし")
+        lines.append("監視範囲の変更: なし")
 
     with_errors = [s for s in valid if s["errors"]]
     if with_errors:
+        # 読めない間は変化を見逃しうるので、問題とみなす（権限の設定などを直すべき状況）
         problems.append("読み取りエラー")
         worst = max(with_errors, key=lambda s: s["errors"])
-        lines.append("! 読み取りエラー: %d 個のスナップショットで発生（最大 %d 件, seq %d）。"
-                     "エラーの間は、変更された期間が広がります" % (len(with_errors), worst["errors"], worst["seq"]))
+        lines.append("読み取りエラー: 記録 {:,} 件、最大 {:,} ファイル（{}）".format(
+            len(with_errors), worst["errors"], timeutil.format_local(worst["started_at"])))
         if result["still_error_count"]:
-            lines.append("! 期間の終わりでもエラーのまま: %d 件。エラーになる前から変わったかどうかは分かりません"
-                         % result["still_error_count"])
+            lines.append("期間の終わりでもエラーのまま: {:,} ファイル".format(result["still_error_count"]))
     else:
-        lines.append("✓ 読み取りエラー: なし")
+        lines.append("読み取りエラー: なし")
 
     return lines, problems
 
@@ -405,8 +387,9 @@ def monitoring_report(conf: dict, result: dict, since, until) -> tuple:
 def cmd_review(conf: dict, args) -> int:
     """1 台のホストについて、期間内の変化と監視の状況を表示する。
 
-    表の形式では「監視の状況」「変化」「判定」を出す。CSV・JSON では変化だけを出す（監視の状況に
-    問題があれば、標準エラー出力に書く）。監視の状況に問題がなければ 0、あれば 1 を返す。
+    表の形式では「変化」「監視の状況」の順に出す（変化が多くても、監視の状況が最後に目に入るように）。
+    CSV・JSON では変化だけを出す（監視の状況に問題があれば、標準エラー出力に書く）。
+    監視の状況に問題（✗）がなければ 0、あれば 1 を返す。
     """
     host = args.host
     if host not in conf["hosts"]:
@@ -419,7 +402,7 @@ def cmd_review(conf: dict, args) -> int:
 
     result = analyze_host_period(conf, host, low, high)
     if result is None:
-        print("ストレージに " + host + " のスナップショットがありません", file=sys.stderr)
+        print("ストレージに " + host + " の記録がありません", file=sys.stderr)
         return 1
     lines, problems = monitoring_report(conf, result, since, until)
     changes = filter_changes(result["changes"], low, high, args.detected, path_regexes, types)
@@ -434,30 +417,15 @@ def cmd_review(conf: dict, args) -> int:
         return 1 if problems else 0
 
     print("ホスト  : " + host)
-    print("調査期間: %s 〜 %s" % (timeutil.format_local(since) if since else "最初のスナップショット",
-                                  timeutil.format_local(until) if until else "最新のスナップショット"))
-    print("時刻の表示: " + timeutil.local_zone_label(since or until) + "（実行環境のタイムゾーン。TZ で変えられる）")
-    conditions = ["指定期間に検知したもの" if args.detected else "変更された可能性のある期間が、調査期間と重なるもの"]
-    if args.path:
-        conditions.append("パスが " + " / ".join(args.path) + " のどれかに一致")
-    if types:
-        conditions.append("種別が " + ", ".join(types))
-    print("変化の条件: " + "、".join(conditions))
+    print("調査期間: %s - %s" % (timeutil.format_local(since) if since else "最初の記録",
+                                  timeutil.format_local(until) if until else "最新の記録"))
+    print()
+    print("[変化の履歴]")
+    print_changes_table(changes)
     print()
     print("[監視の状況]")
     for line in lines:
         print(line)
-    print()
-    print("[変化]")
-    print_changes_table(changes)
-    print()
-    if problems:
-        print("[判定] 監視の状況に確認が必要な点があります: " + "、".join(problems))
-    elif args.path or types or args.detected:
-        print("[判定] 監視の状況に問題はありません（変化は条件で絞り込んでいます）。")
-    else:
-        print("[判定] 監視の状況に問題はありません。上の変化がすべて説明できれば、"
-              "監視範囲のファイル内容について、この期間に説明のつかない変更はありません。")
     return 1 if problems else 0
 
 

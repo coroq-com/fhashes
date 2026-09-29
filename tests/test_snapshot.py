@@ -109,6 +109,28 @@ class ReadWriteTest(unittest.TestCase):
         with self.assertRaises(snapshot.SnapshotFormatError):
             snapshot.read_summary(self.path)
 
+    def test_summary_with_small_chunks(self):
+        # 展開の区切りが行の途中に来ても、最初の行・最後の行・行数を正しく取り出せる
+        end = self.write()
+        original = (snapshot.SUMMARY_CHUNK, snapshot.SUMMARY_TAIL)
+        try:
+            for chunk, tail in ((7, 1024), (1, 1024), (1024, 300)):
+                snapshot.SUMMARY_CHUNK, snapshot.SUMMARY_TAIL = chunk, tail
+                summary = snapshot.read_summary(self.path)
+                self.assertEqual(summary["end"], end, (chunk, tail))
+                self.assertEqual(summary["header"]["seq"], 3)
+        finally:
+            snapshot.SUMMARY_CHUNK, snapshot.SUMMARY_TAIL = original
+
+    def test_missing_last_newline_is_still_one_line(self):
+        # 最後の改行がなくても、最後の行は 1 行と数える（以前の読み方と同じ）
+        end = self.write()
+        with gzip.open(self.path, "rb") as f:
+            data = f.read()
+        with gzip.open(self.path, "wb") as f:
+            f.write(data.rstrip(b"\n"))
+        self.assertEqual(snapshot.read_summary(self.path)["end"], end)
+
     def test_content_tampering_is_detected(self):
         self.write()
         with gzip.open(self.path, "rb") as f:
