@@ -1,7 +1,7 @@
 """指定期間のスナップショットを取ってきて検証し、隣り合うスナップショットを比べて変化を見つける。
 
 何も保存しない。コマンドを実行するたびに、ストレージの一覧とスナップショット（キャッシュ）から計算する。
-判定の規則は DESIGN.md §7.3 を参照。
+判定の規則は DESIGN.md §8.3 を参照。
 
 用語:
   prev / cur  : 同じホストの、隣り合う 2 つのスナップショット（前・後）
@@ -52,7 +52,7 @@ def analyze_host(conf: dict, entries: list, show_progress: bool = True) -> dict:
     返り値:
       snapshots : 各スナップショットの情報（dict のリスト。不正なものも含む）
       changes   : 見つかった変化（dict のリスト）
-      still_error_count : 最後の時点でエラーのままのファイルの数
+      still_error : 最後の時点でエラーのままのファイルの一覧（path と、読めなくなった時期 changed_after / changed_before）
     """
     storage.download(conf, entries, show_progress)
     progress = Progress("記録の検証", len(entries) if show_progress else 0)
@@ -66,6 +66,7 @@ def check_and_compare(conf: dict, entries: list, progress: Progress) -> dict:
     snapshots = []
     changes = []
     still_error = {}
+    error_since = {}  # エラーのままのファイルが、読めなくなった時期（前の記録の開始, その記録の終了）
     prev = None
     for index, entry in enumerate(entries, 1):
         progress.update(index)
@@ -86,8 +87,15 @@ def check_and_compare(conf: dict, entries: list, progress: Progress) -> dict:
                 still_error.update(saved)
                 continue
             changes.extend(found)
+            for key in still_error:
+                error_since.setdefault(key, (prev["started_at"], info["finished_at"]))
+            for key in list(error_since):
+                if key not in still_error:
+                    del error_since[key]
         prev = info
-    return {"snapshots": snapshots, "changes": changes, "still_error_count": len(still_error)}
+    still_error_list = [{"path": still_error[key]["path"], "changed_after": error_since[key][0],
+                         "changed_before": error_since[key][1]} for key in sorted(still_error)]
+    return {"snapshots": snapshots, "changes": changes, "still_error": still_error_list}
 
 
 def load_snapshot(conf: dict, entry: dict, prev) -> dict:
@@ -269,7 +277,11 @@ def handle_path(ctx: dict, key: bytes, p, c) -> None:
         still_error.pop(key, None)
         if base is None:
             if p is not None:
-                return  # 前は読めず、それ以前の状態も分からない（現れたときに added を記録済み）
+                # 前は読めず、それ以前の状態も分からない（現れたときに、ハッシュ不明の added を記録済み）。
+                # 読めるようになった中身を見逃さないように、前の中身が不明の modified にする
+                add_change(ctx, display, "modified", p["kind"], c["kind"], None, c["hash"],
+                           prev["started_at"], cur["finished_at"])
+                return
             if ctx["scope_changed"] and not ctx["prev_scope"].contains(path):
                 return  # 監視範囲に入った
             add_change(ctx, display, "added", None, c["kind"], None, c["hash"],

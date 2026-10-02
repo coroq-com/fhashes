@@ -44,10 +44,13 @@ def from_compact(compact_text: str) -> str:
 # ----------------------------------------------------------------------
 
 def format_local(utc_text) -> str:
-    """表示用: 実行環境のタイムゾーンで "2026-09-23 10:00:00" の形式にする。None なら空文字。"""
+    """表示用: 実行環境のタイムゾーンで "2026-09-23 10:00" の形式（分まで）にする。None なら空文字。
+
+    記録は 1 時間おきなので、秒まで出しても判断には役立たない。CSV / JSON は UTC の秒までを出す（別の処理）。
+    """
     if utc_text is None:
         return ""
-    return parse_utc(utc_text).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    return parse_utc(utc_text).astimezone().strftime("%Y-%m-%d %H:%M")
 
 
 # 日付、または日付と時刻（区切りは T か空白。秒と 1 秒未満は省ける）。時刻があればタイムゾーンも書ける（Z、+09:00、+0900）
@@ -73,20 +76,40 @@ def parse_iso(value: str) -> datetime:
                     int((fraction or "0").ljust(6, "0")), tzinfo=tz)
 
 
-def parse_user_time(text: str, end_of_range: bool = False) -> str:
+# 「今からどれだけ前」の書き方: 数と単位（m 分、h 時間、d 日、w 週）。マイナスは付けない
+# （--from -4d は、-4d がオプションと解釈されてしまうため）
+RELATIVE_TIME_REGEX = re.compile(r"^(\d+)([mhdw])$")
+RELATIVE_UNITS = {"m": timedelta(minutes=1), "h": timedelta(hours=1), "d": timedelta(days=1), "w": timedelta(weeks=1)}
+
+
+def format_local_range(start: str, end: str) -> str:
+    """表示用: 範囲を "2026-09-21 03:02 - 04:02" の形にする（同じ日なら、終わりの日付を省く）。"""
+    start_text = format_local(start)
+    end_text = format_local(end)
+    return start_text + " - " + (end_text[11:] if start_text[:10] == end_text[:10] else end_text)
+
+
+def parse_user_time(text: str, end_of_range: bool = False, now=None) -> str:
     """コマンドで指定された日時を UTC の文字列にする。
 
     受け付ける形式:
       "2026-09-23"、"2026-09-23 10:00"、"2026-09-23T10:00:00"   … 実行環境のタイムゾーンで解釈する
       "2026-09-23T10:00+09:00"、"2026-09-23T01:00Z"             … 書かれたタイムゾーンで解釈する
+      "4d"、"12h"、"30m"、"2w"                                   … 今からその長さだけ前（4d はちょうど 96 時間前）
     end_of_range=True で日付だけが指定された場合は、その日の終わり（翌日 0:00）を返す。
+    now は「今」（テスト用。省略すると実際の今）。
     """
     value = text.strip()
+    relative = RELATIVE_TIME_REGEX.match(value)
+    if relative:
+        base = now or datetime.now(timezone.utc)
+        return to_utc_text(base - int(relative.group(1)) * RELATIVE_UNITS[relative.group(2)])
     try:
         dt = parse_iso(value)
     except ValueError:
         raise ValueError("日時の形式が不正です: " + text
-                         + "（例: 2026-09-23、'2026-09-23 10:00'、2026-09-23T10:00+09:00、2026-09-23T01:00Z）")
+                         + "（例: 2026-09-23、'2026-09-23 10:00'、2026-09-23T10:00+09:00、2026-09-23T01:00Z、"
+                           "4d（4 日前）、12h（12 時間前））")
     if end_of_range and len(value) == len("2026-09-23"):
         dt = dt + timedelta(days=1)
     if dt.tzinfo is None:

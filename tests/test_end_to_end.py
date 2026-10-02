@@ -43,7 +43,7 @@ class EndToEndTest(unittest.TestCase):
             code = cli.main(list(args))
         return code, out.getvalue()
 
-    def test_record_then_review(self):
+    def test_record_then_log(self):
         helpers.write_file(self.data, "index.php", "1")
         helpers.write_file(self.data, "old.php", "1")
         self.assertEqual(self.run_cli("record", "--config", self.record_config)[0], 0)
@@ -53,7 +53,7 @@ class EndToEndTest(unittest.TestCase):
         helpers.write_file(self.data, "new.php", "1")
         self.assertEqual(self.run_cli("record", "--config", self.record_config)[0], 0)
 
-        code, out = self.run_cli("review", "--config", self.review_config, "web1",
+        code, out = self.run_cli("log", "--config", self.review_config, "web1",
                                  "--from", "2000-01-01", "--to", "2999-01-01", "--format", "csv")
         lines = sorted(line.split(",")[2] + " " + os.path.basename(line.split(",")[1])
                        for line in out.strip().splitlines()[1:])
