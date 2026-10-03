@@ -28,7 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-upload", action="store_true", help="記録を作るだけで送らない")
 
     # 調べる側
-    p = sub.add_parser("status", help="[調査] ホストごとの最新の記録と異常を表示する")
+    p = sub.add_parser("status", help="[調査] ホストごとの最新の記録、記録の遅れ、異常を表示する")
     p.add_argument("--config", help=review_help)
 
     p = sub.add_parser("log", help="[調査] 1 台のホストについて、期間内の変化の履歴と監視の状況を表示する")
