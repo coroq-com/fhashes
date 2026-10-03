@@ -1,7 +1,8 @@
 [Unit]
-Description=fhashes: 毎時の記録
+Description=fhashes: 定期的な記録
 
 [Timer]
+# 実行間隔。サーバーに合わせて変える（例: 4 時間ごと *-*-* 00/4:00:00、6 時間ごと *-*-* 00/6:00:00）
 OnCalendar=hourly
 Persistent=true
 
