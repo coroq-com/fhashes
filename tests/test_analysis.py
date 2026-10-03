@@ -117,6 +117,21 @@ class AnalysisTest(AnalysisTestCase):
         self.make_snapshot(1, t(5), [("/app/a", "h1")], prev_sha=None)              # 状態ファイルが失われた
         self.assertEqual(self.chains(), ["first", "broken", "gap", "restart"])
 
+    def test_check_records_does_not_compare(self):
+        # status 用: 検証とつながりの確認だけで、中身は突き合わせない（結果は analyze_host の snapshots と同じ）
+        self.make_snapshot(1, t(1), [("/app/a", "h1")])
+        self.make_snapshot(2, t(2), [("/app/a", "h2")], prev_sha="0" * 64)
+        self.make_snapshot(4, t(4), [("/app/a", "h3")], prev_sha="1" * 64)
+        entries = storage.list_snapshots(self.conf, "web1")
+        original = analysis.compare
+        analysis.compare = None     # 呼ばれたら TypeError
+        try:
+            snapshots = analysis.check_records(self.conf, entries)
+        finally:
+            analysis.compare = original
+        self.assertEqual([s["chain"] for s in snapshots], ["first", "broken", "gap"])
+        self.assertEqual(snapshots, self.analyze()["snapshots"])
+
     def test_missing_snapshot_arrives_later(self):
         self.make_snapshot(1, t(1), [("/app/a", "h1")])
         path2 = self.make_snapshot(2, t(2), [("/app/a", "h2")])

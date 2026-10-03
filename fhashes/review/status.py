@@ -2,7 +2,8 @@
 
 間隔はストレージの一覧（ファイル名の時刻）だけで調べ、直近 RECENT_COUNT 件の間隔の中央値と最大値を出す。
 最新の記録の異常（不正、記録の欠落などハッシュチェーンの異常、読み取りエラー）は、最新の 2 つだけを
-ダウンロードして調べる。直前の記録が不正なら、最新の記録のつながりを確かめられないので、それも異常とする。
+ダウンロードして調べる（中身の突き合わせはしない。時間がかかり、status には要らないため）。
+直前の記録が不正なら、最新の記録のつながりを確かめられないので、それも異常とする。
 
 記録の遅れ: 次の記録は「最新の記録の終了 + 間隔の中央値」のころに届くはず。そこから DELAY_ALLOWANCE
 を過ぎても届いていなければ、記録が止まっている（サーバーの停止、タイマーの不調など）か、走査が遅く
@@ -36,7 +37,7 @@ def status_row(conf: dict, host: str, now: str) -> tuple:
         return [host, "-", "-", "-", "-", "-", "記録なし"], True
     times = [e["name_time"] for e in entries]
     stats = monitoring.interval_stats(times[-(RECENT_COUNT + 1):])
-    snapshots = analysis.analyze_host(conf, entries[-2:], show_progress=False)["snapshots"]
+    snapshots = analysis.check_records(conf, entries[-2:])
     latest = snapshots[-1]
 
     problems = []

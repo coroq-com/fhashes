@@ -46,7 +46,7 @@ def select_range(entries: list, since: str, until: str) -> list:
 # 1 ホスト分の解析
 # ----------------------------------------------------------------------
 
-def analyze_host(conf: dict, entries: list, show_progress: bool = True) -> dict:
+def analyze_host(conf: dict, entries: list) -> dict:
     """entries（古い順）のスナップショットを検証し、隣り合うものを比べる。
 
     返り値:
@@ -54,12 +54,30 @@ def analyze_host(conf: dict, entries: list, show_progress: bool = True) -> dict:
       changes   : 見つかった変化（dict のリスト）
       still_error : 最後の時点でエラーのままのファイルの一覧（path と、読めなくなった時期 changed_after / changed_before）
     """
-    storage.download(conf, entries, show_progress)
-    progress = Progress("記録の検証", len(entries) if show_progress else 0)
+    storage.download(conf, entries)
+    progress = Progress("記録の検証", len(entries))
     try:
         return check_and_compare(conf, entries, progress)
     finally:
         progress.close()
+
+
+def check_records(conf: dict, entries: list) -> list:
+    """entries（古い順）のスナップショットを検証し、つながり（ハッシュチェーン）を確かめる。中身は比べない。
+
+    status 用。比べるには 2 つの記録を展開して全部の行を突き合わせるので時間がかかり、その結果は残らない
+    （毎回やり直しになる）。検証の結果はキャッシュされるので、2 回目からは展開しない。
+    返り値は analyze_host の snapshots と同じ形。中身の行だけが壊れていることは、ここでは分からない（log / diff で分かる）。
+    """
+    storage.download(conf, entries, show_progress=False)
+    snapshots = []
+    prev = None
+    for entry in entries:
+        info = load_snapshot(conf, entry, prev)
+        snapshots.append(info)
+        if info["problem"] is None:
+            prev = info
+    return snapshots
 
 
 def check_and_compare(conf: dict, entries: list, progress: Progress) -> dict:
