@@ -50,26 +50,29 @@ def check_roots(scope: Scope) -> None:
         raise MissingRootError("監視範囲の起点がありません: " + ", ".join(missing))
 
 
-def walk(scope: Scope, on_file, on_error) -> None:
+def walk(scope: Scope, on_file, on_error, pathmap=None) -> None:
     """監視範囲のファイルとシンボリックリンクを 1 つずつ見つけて、コールバックを呼ぶ。
 
-    on_file(path, kind, st)    : kind は "file" か "link"。st は os.lstat の結果
-    on_error(path, kind, error): 調べられなかったもの。kind は "file" / "link" / "dir"
+    on_file(path, kind, st, real): kind は "file" か "link"。st は os.lstat の結果。
+                                   real は実際に読む場所（pathmap がなければ path と同じ）
+    on_error(path, kind, error)  : 調べられなかったもの。kind は "file" / "link" / "dir"
     デバイス・FIFO・ソケットは無視する。マウントポイント（別のファイルシステム）にも入る
     （/proc などを避けたい場合は exclude に書く）。
     シンボリックリンクは、走査の起点だけたどる（途中のリンクはたどらず、リンク自体を記録する）。
+    pathmap（check の --map）があれば、パスは元のパスのまま扱い、読むときだけ対応するマウント先から読む。
     """
     for root in scope.roots():
-        walk_root(scope, root, on_file, on_error)
+        walk_root(scope, root, on_file, on_error, pathmap)
 
 
-def walk_root(scope: Scope, root: dict, on_file, on_error) -> None:
+def walk_root(scope: Scope, root: dict, on_file, on_error, pathmap=None) -> None:
     """走査の起点 1 つ分。起点はファイルのこともある。"""
     path = root["path"]
     if scope.is_excluded(path):
         return
     try:
-        st = os.lstat(path)
+        real = pathmap.resolve(path, follow_last=False) if pathmap else path
+        st = os.lstat(real)
     except FileNotFoundError:
         missing_root(root, on_error)
         return
@@ -79,10 +82,11 @@ def walk_root(scope: Scope, root: dict, on_file, on_error) -> None:
 
     if stat.S_ISLNK(st.st_mode):
         if scope.contains(path):
-            on_file(path, "link", st)
+            on_file(path, "link", st, real)
         # 起点がディレクトリへのリンク（デプロイの current など）なら、たどって中を走査する
         try:
-            target = os.stat(path)
+            target_real = pathmap.resolve(path, follow_last=True) if pathmap else path
+            target = os.stat(target_real)
         except FileNotFoundError:
             missing_root(root, on_error)
             return
@@ -90,12 +94,12 @@ def walk_root(scope: Scope, root: dict, on_file, on_error) -> None:
             on_error(path, "dir", e)
             return
         if stat.S_ISDIR(target.st_mode):
-            walk_directory(scope, path, on_file, on_error)
+            walk_directory(scope, path, on_file, on_error, target_real, pathmap)
     elif stat.S_ISREG(st.st_mode):
         if scope.contains(path):
-            on_file(path, "file", st)
+            on_file(path, "file", st, real)
     elif stat.S_ISDIR(st.st_mode):
-        walk_directory(scope, path, on_file, on_error)
+        walk_directory(scope, path, on_file, on_error, real, pathmap)
 
 
 def missing_root(root: dict, on_error) -> None:
@@ -110,12 +114,17 @@ def missing_root(root: dict, on_error) -> None:
         raise MissingRootError("監視範囲の起点がありません: " + root["path"])
 
 
-def walk_directory(scope: Scope, root: str, on_file, on_error) -> None:
-    stack = [root]
+def walk_directory(scope: Scope, root: str, on_file, on_error, real_root=None, pathmap=None) -> None:
+    """ディレクトリ root の中を走査する。real_root は実際に読む場所（省けば root）。
+
+    スタックには（元のパス, 実際に読む場所）の組を積む。起点がリンクのときは、リンクを通した元のパスで
+    記録しつつ、リンク先から読むため。pathmap で別の対応の元のパスに来たら、そのマウント先へ移る。
+    """
+    stack = [(root, real_root or root)]
     while stack:
-        dir_path = stack.pop()
+        dir_path, dir_real = stack.pop()
         try:
-            with os.scandir(dir_path) as iterator:
+            with os.scandir(dir_real) as iterator:
                 entries = sorted(iterator, key=lambda entry: entry.name)
         except FileNotFoundError:
             continue  # 走査中に消えた
@@ -126,18 +135,19 @@ def walk_directory(scope: Scope, root: str, on_file, on_error) -> None:
         subdirs = []
         for entry in entries:
             path = join_path(dir_path, entry.name)
+            real = (pathmap and pathmap.mount_at(path)) or join_path(dir_real, entry.name)
             try:
                 # stat は entry.stat() ではなく os.lstat() で取る。entry.stat() は結果を entry に残すので、
                 # ディレクトリ 1 つ分の一覧を処理し終えるまでメモリが解放されない（15 万ファイルで約 100MB）
                 if entry.is_symlink():
                     if scope.contains(path):
-                        on_file(path, "link", os.lstat(path))
+                        on_file(path, "link", os.lstat(real), real)
                 elif entry.is_dir(follow_symlinks=False):
                     if scope.should_descend(path):
-                        subdirs.append(path)
+                        subdirs.append((path, real))
                 elif entry.is_file(follow_symlinks=False):
                     if scope.contains(path):
-                        on_file(path, "file", os.lstat(path))
+                        on_file(path, "file", os.lstat(real), real)
             except FileNotFoundError:
                 continue  # 走査中に消えた
             except OSError as e:

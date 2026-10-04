@@ -170,7 +170,7 @@ def scan_into_current(conn: sqlite3.Connection, conf: dict, seq: int) -> dict:
         conn.executemany("INSERT OR REPLACE INTO current VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", pending_rows)
         pending_rows.clear()
 
-    def on_file(path, kind, st):
+    def on_file(path, kind, st, real):
         key = os.fsencode(path)
         cached = conn.execute("SELECT * FROM files WHERE path_key = ?", (key,)).fetchone()
         if (cached is not None and same_stat(cached, kind, st)
@@ -179,7 +179,7 @@ def scan_into_current(conn: sqlite3.Connection, conf: dict, seq: int) -> dict:
             was_read = 0
         else:
             try:
-                digest = walker.hash_file(path, kind)
+                digest = walker.hash_file(real, kind)
             except OSError as e:
                 on_error(path, kind, e)
                 return
