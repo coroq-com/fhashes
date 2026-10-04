@@ -128,7 +128,7 @@ class StorageTestCase(unittest.TestCase):
                       prev_sha="auto", finished_after_seconds=60) -> str:
         """記録を 1 つストレージに作る。終了は開始の finished_after_seconds 秒後。
 
-        rows: (パス, ハッシュ) か (パス, None, エラー種類 "file"/"dir") のリスト。
+        rows: (パス, ハッシュ)、(パス, ハッシュ, 種類 "file"/"link") か (パス, None, エラー種類 "file"/"dir") のリスト。
               ハッシュは "h1" のような短い文字列でよい。
         """
         scope = scope or SCOPE
@@ -142,7 +142,7 @@ class StorageTestCase(unittest.TestCase):
         writer = snapshot.SnapshotWriter(path, header)
         for row in sorted(rows, key=lambda r: r[0].encode()):
             if row[1] is not None:
-                writer.write_file(row[0], "file", row[1])
+                writer.write_file(row[0], row[2] if len(row) > 2 else "file", row[1])
             else:
                 writer.write_error(row[0], row[2], "PermissionError: Permission denied")
         writer.close(timeutil.to_utc_text(timeutil.parse_utc(started_at) + timedelta(seconds=finished_after_seconds)))

@@ -1,7 +1,7 @@
 """コマンドラインの入口。使い方は `fhashes --help` / `fhashes <コマンド> --help` を参照。
 
 記録する側（監視対象で動かす）: record                   設定: config/record.yaml
-調べる側                      : status / log / diff / clean  設定: config/review.yaml
+調べる側                      : status / log / diff / check / clean  設定: config/review.yaml
 （config/ はこのリポジトリの中。--config か環境変数で変えられる）
 """
 
@@ -68,6 +68,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--not-type", action="append",
                    help="この変化の種別（印）を除く（書き方は --type と同じ。例: D、'=~'）")
 
+    p = sub.add_parser("check", help="[調査] 実際のファイルを読んで、ある時点の記録と照らし合わせる")
+    p.add_argument("--config", help=review_help)
+    p.add_argument("host", help="ホスト名（1 台だけ）")
+    p.add_argument("--at", help="比べる記録の日時（形式は log の --from と同じ）。この日時までに終わった最後の記録と比べる。"
+                                "省くと最新の記録")
+    p.add_argument("--map", action="append",
+                   help="元のパス:マウント先（例: /:/mnt/snap）。ファイルが元の場所にないとき（マウントしたスナップショットなど）、"
+                        "そのパスをマウント先から読む。複数指定できる。指定すると、対応のない場所は照合の範囲外になる")
+    p.add_argument("--path", action="append",
+                   help="パスのワイルドカードで絞り込む（diff と同じ）。合わないディレクトリは読まない")
+    p.add_argument("--not-path", action="append",
+                   help="このパスのワイルドカードに一致するものを除く（書き方は --path と同じ。複数指定できる）")
+    p.add_argument("--type", action="append",
+                   help="差の種別（印）で絞り込む（A D M T ? をつなげて書く。例: A、AM）")
+    p.add_argument("--not-type", action="append", help="この差の種別（印）を除く（書き方は --type と同じ）")
+
     p = sub.add_parser("clean", help="[調査] ダウンロードした記録のキャッシュを消す")
     p.add_argument("--config", help=review_help)
     return parser
@@ -77,7 +93,7 @@ def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if not args.command:
-        parser.error("コマンドを指定してください（record / status / log / diff / clean）")
+        parser.error("コマンドを指定してください（record / status / log / diff / check / clean）")
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
@@ -121,8 +137,8 @@ def record_command(args) -> int:
 
 
 def review_command(args) -> int:
-    """調べる側のコマンド（status / log / diff / clean）。設定は config/review.yaml（調べる側の設定）。"""
-    from fhashes.review import diff, log, status, storage
+    """調べる側のコマンド（status / log / diff / check / clean）。設定は config/review.yaml（調べる側の設定）。"""
+    from fhashes.review import check, diff, log, status, storage
 
     path = args.config or os.environ.get("FHASHES_REVIEW_CONFIG") or config.DEFAULT_REVIEW_CONFIG
     conf = config.load_review_config(path)
@@ -133,6 +149,8 @@ def review_command(args) -> int:
             return log.cmd_log(conf, args)
         if args.command == "diff":
             return diff.cmd_diff(conf, args)
+        if args.command == "check":
+            return check.cmd_check(conf, args)
         removed = storage.clean_cache(conf)
         print("キャッシュを消しました: %s（%.1f MB）" % (conf["cache_dir"], removed / 1e6))
         return 0
