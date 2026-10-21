@@ -158,12 +158,12 @@ bin/fhashes record                # 1 回実行して、記録がストレージ
 2. **消せなくする**設定（保持期間。例: 180 日）。**ロックすると取り消せない**ので、最初はロックせずに試す
 3. **期限後に消す**設定（ライフサイクル。保持期間より少し長く）
 4. 鍵を 2 種類用意する（どちらもバケット単位の権限でよい）
-   - 記録する側（監視対象）用: **作成と読み取りだけ**できる鍵（上書き・削除はできない。読み取りは、送信済みのものを送り直したときに確かめるため）
+   - 記録する側（監視対象）用: **作成と読み取りだけ**できる鍵（上書き・削除はできない。読み取りは、送信済みのものを送り直したときに確かめるため。S3 は送り先にないことを確かめるのに一覧も要る）
    - 調べる側用: **読み取りと一覧だけ**できる鍵
 
 | | 消せなくする | 期限後に消す | 記録する側に渡す権限 | 調べる側に渡す権限 | 手順 |
 |---|---|---|---|---|---|
-| AWS S3 | オブジェクトロック | ライフサイクル | `s3:PutObject`、`s3:GetObject` | `s3:ListBucket`、`s3:GetObject` | [docs/storage-aws-s3.md](docs/storage-aws-s3.md) |
+| AWS S3 | オブジェクトロック | ライフサイクル | `s3:PutObject`、`s3:GetObject`、`s3:ListBucket` | `s3:ListBucket`、`s3:GetObject` | [docs/storage-aws-s3.md](docs/storage-aws-s3.md) |
 | GCS | 保持ポリシー | ライフサイクル | `roles/storage.objectCreator`、`roles/storage.objectViewer` | `roles/storage.objectViewer` | [docs/storage-gcp-gcs.md](docs/storage-gcp-gcs.md) |
 | Azure Blob | 不変ストレージ（時間ベースの保持） | ライフサイクル管理 | SAS（`rcw`） | SAS（`rl`） | [docs/storage-azure-blob.md](docs/storage-azure-blob.md) |
 

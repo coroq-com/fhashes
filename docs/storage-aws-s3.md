@@ -20,14 +20,16 @@ aws s3api put-bucket-lifecycle-configuration --bucket fhashes-snapshots --lifecy
 
 ## 記録する側
 
-IAM ポリシー（作成と読み取り）:
+IAM ポリシー（作成と読み取り、一覧）:
 
 ```json
 {"Version": "2012-10-17", "Statement": [
+  {"Effect": "Allow", "Action": "s3:ListBucket", "Resource": "arn:aws:s3:::fhashes-snapshots"},
   {"Effect": "Allow", "Action": ["s3:PutObject", "s3:GetObject"], "Resource": "arn:aws:s3:::fhashes-snapshots/*"}
 ]}
 ```
 
+- 一覧（`s3:ListBucket`）も必要です。rclone は送る前に送り先に同じ名前のものがあるかを確かめますが、S3 は一覧の権限がない鍵に対しては、ないものを「ない（404）」ではなく「拒否（403）」と答えるため、送信が失敗します。
 - S3 では、同じ名前で違う中身を送ると、拒否されずに新しいバージョンとして保存されます（前のバージョンはオブジェクトロックで残ります）。調べる側は最新のバージョンを読むので、置き換えられた場合はハッシュチェーンの異常として見つかります。
 
 rclone の設定と `config/record.yaml`:
@@ -69,4 +71,4 @@ hosts:
 
 ## より安全にする場合（任意）
 
-記録する側の権限を、そのホストの場所だけに絞ります（IAM ポリシーの `Resource` を `arn:aws:s3:::fhashes-snapshots/web1/*` にする）。または、ホストごとにバケットを分けます。
+記録する側の権限を、そのホストの場所だけに絞ります（IAM ポリシーの `s3:PutObject`・`s3:GetObject` の `Resource` を `arn:aws:s3:::fhashes-snapshots/web1/*` にし、`s3:ListBucket` には `"Condition": {"StringLike": {"s3:prefix": ["web1/*"]}}` を付ける）。一覧を絞った状態でも送信できることを、実際の環境で確かめてください。または、ホストごとにバケットを分けます。
