@@ -70,6 +70,30 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(lines[1:], ["    M a", "    M b"])
 
 
+class UnprintableTest(unittest.TestCase):
+    """ファイル名の制御文字で、端末の表示を書き換えられないこと。"""
+
+    def test_control_characters_are_escaped(self):
+        lines = printed(tree.render(items(("/app/shell.php", "A"),
+                                          ("/app/shell.php\x1b[1A\x1b[2K\r", "A"),
+                                          ("/app/zz\n    A legit.php", "A"),
+                                          ("/app/evil‮gnp.php", "A")), []))
+        self.assertEqual(lines, [
+            "/app/",
+            "    A evil\\u202egnp.php",
+            "    A shell.php",
+            "    A shell.php\\x1b[1A\\x1b[2K\\x0d",
+            "    A zz\\x0a    A legit.php",   # 改行で偽の行を足せない
+        ])
+
+    def test_printable_text_is_unchanged(self):
+        from fhashes.review.display import printable
+        self.assertEqual(printable("/var/www/日本語 ファイル.php"), "/var/www/日本語 ファイル.php")
+        self.assertEqual(printable("全角　空白 "), "全角　空白 ")  # 空白（Zs）はそのまま
+        self.assertEqual(printable("a​b\tc d"), "a\\u200bb\\x09c\\u2028d")  # ゼロ幅・タブ・行の区切り
+        self.assertEqual(printable("\U000e0001"), "\\U000e0001")
+
+
 class LegendTest(unittest.TestCase):
     def test_legend_layout(self):
         out = io.StringIO()

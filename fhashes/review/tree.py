@@ -7,7 +7,7 @@
 木に載せるものは {"path", "mark", ...} の dict。右に添える文字（時期など）は period_of で決める。
 """
 
-from fhashes.review.display import display_width
+from fhashes.review.display import display_width, printable
 
 
 def split_by_roots(items: list, roots: list) -> list:
@@ -105,7 +105,11 @@ def render(items: list, roots: list, period_of=lambda item: "") -> list:
 
 
 def print_lines(lines: list) -> None:
-    """木の行を出す。右に添える文字は、列をそろえて出す。"""
+    """木の行を出す。右に添える文字は、列をそろえて出す。
+
+    行にはパス（監視対象のファイル名）が入るので、表示できない文字は表記にしてから出す（display.printable）。
+    """
+    lines = [(depth, printable(text), printable(right)) for depth, text, right in lines]
     width = max(4 * depth + display_width(text) for depth, text, _ in lines)
     for depth, text, right in lines:
         body = "    " * depth + text

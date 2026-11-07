@@ -12,6 +12,7 @@ import sys
 from fhashes import config, patterns, timeutil
 from fhashes.patterns import Scope
 from fhashes.review import analysis, monitoring, storage
+from fhashes.review.display import printable
 
 # --from / --to を省いたときの範囲の端。時刻の文字列どうしの大小比較にだけ使う（表示しない）
 OPEN_START = "0000-01-01T00:00:00Z"
@@ -75,7 +76,7 @@ class Period:
         """[監視の状況] を出し、終了コード（問題があれば 1）を返す。"""
         print("[監視の状況]")
         for line in self.monitoring_lines:
-            print(line)
+            print(printable(line))  # 不正な記録の理由や監視範囲の起点など、記録から来た文字を含む
         return self.exit_code()
 
     def exit_code(self) -> int:

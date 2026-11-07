@@ -24,6 +24,7 @@ from fhashes.pathmap import PathMap, is_under
 from fhashes.patterns import Scope
 from fhashes.progress import Progress
 from fhashes.review import analysis, diff, monitoring, period, storage, tree
+from fhashes.review.display import printable
 
 MARKS = (
     ("A", "追加"),
@@ -326,5 +327,5 @@ def cmd_check(conf: dict, args) -> int:
     print()
     print("[監視の状況]")
     for line in lines:
-        print(line)
+        print(printable(line))  # 照合の範囲外の起点など、記録から来た文字を含む
     return 1 if shown or problems else 0
