@@ -2,6 +2,7 @@
 
 import io
 import os
+import stat
 import sys
 import unittest
 from unittest import mock
@@ -187,6 +188,23 @@ class RecordTest(RecordTestBase):
             f.write("include:\n  - " + self.data + "/**\n")
         with self.assertRaises(config.ConfigError):
             config.load_record_config(path)
+
+    def test_state_is_private(self):
+        # 状態とスナップショットには全ファイルのパスとハッシュがあるので、ほかのユーザーには読ませない
+        state = os.path.join(self.base, "state")
+        os.makedirs(state, mode=0o755)
+        os.chmod(state, 0o755)                     # 前の版で作った state_dir（umask 022）に見立てる
+        saved = os.umask(0o022)
+        try:
+            helpers.write_file(self.data, "a.txt", "1")
+            path = self.record()["path"]
+            self.assertEqual(os.umask(0o022), 0o022)  # 終わったら元の umask に戻す
+        finally:
+            os.umask(saved)
+        self.assertEqual(stat.S_IMODE(os.stat(state).st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.join(state, "state.sqlite3")).st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.join(state, "outbox")).st_mode), 0o700)
 
     def test_invalid_wildcard_is_config_error(self):
         # 正規表現にできないワイルドカードは、走査の途中ではなく設定の読み込みで止める

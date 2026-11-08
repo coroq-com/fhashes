@@ -8,6 +8,8 @@ User=fhashes
 # リポジトリを clone した場所。設定と状態は、その中の config/ と data/ に置かれる
 ExecStart=/home/fhashes/fhashes/bin/fhashes record
 Nice=19
+# 作るファイルを、このユーザーだけが読めるようにする（fhashes record も、状態とスナップショットは自分で 077 にする）
+UMask=0077
 # ディスクの読み書きを後回しにする（効くのはディスクのスケジューラーが BFQ の場合だけ。mq-deadline / none では無視される）
 IOSchedulingClass=idle
 # すべてのファイルを読めるようにする場合は、次の行を有効にする（root で動かす場合は不要）

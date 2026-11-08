@@ -264,10 +264,44 @@ def recover_unmoved_snapshot(tmp_dir: str, outbox_dir: str, prev_snapshot_sha256
             return
 
 
+STATE_UMASK = 0o077     # 状態とスナップショットは、記録に使うユーザーだけが読み書きできるようにする
+STATE_DIR_MODE = 0o700
+
+
+def protect_state_dir(state_dir: str) -> None:
+    """state_dir を、記録に使うユーザーだけが入れるようにする（中のファイルは、ほかのユーザーから見えなくなる）。
+
+    状態とスナップショットには、監視範囲の全ファイルのパスとハッシュが入っている。root や
+    CAP_DAC_READ_SEARCH で動かすと、ほかのユーザーが読めないファイルのものも入る（短い秘密なら、
+    ハッシュから推測を確かめられる）。前の版で作った state_dir（755 など）も、ここで直す。
+    中のファイルの権限は変えない（ディレクトリに入れなければ読めないため）。
+    """
+    try:
+        if os.stat(state_dir).st_mode & 0o777 != STATE_DIR_MODE:
+            os.chmod(state_dir, STATE_DIR_MODE)
+    except OSError as e:
+        # 自分の持ち物でない state_dir など。記録は続ける（権限の問題で記録を止めると、監視が止まるため）
+        log.warning("state_dir の権限を %o にできません（ほかのユーザーが記録を読めるおそれがあります）: %s: %s",
+                    STATE_DIR_MODE, state_dir, e)
+
+
 def record(conf: dict) -> str:
-    """1 回分の記録を行い、outbox に置いたスナップショットのパスを返す。"""
+    """1 回分の記録を行い、outbox に置いたスナップショットのパスを返す。
+
+    この間だけ umask を 077 にする（状態ファイル、SQLite の -wal / -shm、スナップショット、ロックを
+    ほかのユーザーが読めないように作る）。umask はプロセス全体の設定なので、終わったら元に戻す。
+    """
+    saved_umask = os.umask(STATE_UMASK)
+    try:
+        return record_with_umask(conf)
+    finally:
+        os.umask(saved_umask)
+
+
+def record_with_umask(conf: dict) -> str:
     state_dir = conf["state_dir"]
     os.makedirs(state_dir, exist_ok=True)
+    protect_state_dir(state_dir)
     lock = acquire_lock(state_dir)
     try:
         # 起点がない場合は、スナップショットを作らずに失敗する（状態ファイルも変えない）
