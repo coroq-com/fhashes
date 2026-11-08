@@ -22,6 +22,20 @@ def check_pattern(pattern: str) -> None:
             raise ValueError("'.' や '..' は使えません: " + pattern)
         if "**" in segment and segment != "**":
             raise ValueError("'**' は '/**/' のように単独で書いてください: " + pattern)
+        if segment != "**":
+            compile_segment(segment, pattern)  # 文字クラスの範囲の逆（[z-a]）など、正規表現にできないもの
+
+
+def compile_segment(segment: str, pattern: str) -> "re.Pattern":
+    """パスの 1 区切り分を、その区切りだけにマッチする正規表現にする。できなければ ValueError。
+
+    re.error は ValueError ではないので、ここで ValueError にする（設定の読み込みや、スナップショットの
+    検証で「書き方が不正」として扱えるように。ヘッダーのパターンは記録する側が書くので、壊れていることもある）。
+    """
+    try:
+        return re.compile("^" + segment_to_regex(segment) + "$", re.DOTALL)
+    except re.error as e:
+        raise ValueError("ワイルドカードの書き方が不正です（%s）: %s" % (e, pattern))
 
 
 def has_wildcard(segment: str) -> bool:
@@ -94,7 +108,7 @@ def compile_include(pattern: str) -> dict:
         if segment == "**":
             segments.append(None)  # None は ** を表す
         else:
-            segments.append(re.compile("^" + segment_to_regex(segment) + "$", re.DOTALL))
+            segments.append(compile_segment(segment, pattern))
     return {
         "pattern": pattern,
         "regex": glob_to_regex(pattern),

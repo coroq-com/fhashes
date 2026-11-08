@@ -52,8 +52,10 @@ class HeaderTest(unittest.TestCase):
             "prev_snapshot_sha256": "abc",
             "scope_sha256": None,
             "include": "/app/**",
+            "exclude": ["/app/[z-a]"],      # 正規表現にできない（調べる側で使うときに止まらないように、ここで不正とする）
         }
-        for key, value in cases.items():
+        cases_list = list(cases.items()) + [("include", ["app/**"]), ("include", ["/app/../etc/**"])]
+        for key, value in cases_list:
             bad = header()
             bad["fhashes_snapshot"] = snapshot.FORMAT_VERSION
             bad[key] = value

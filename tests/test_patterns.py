@@ -41,9 +41,13 @@ class GlobToRegexTest(unittest.TestCase):
         self.assertFalse(matches("/a/b.txt", "/a/bxtxt"))
 
     def test_invalid_patterns(self):
-        for pattern in ["etc/*", "/", "/etc//a", "/etc/", "/etc/../a", "/etc/a**b"]:
+        for pattern in ["etc/*", "/", "/etc//a", "/etc/", "/etc/../a", "/etc/a**b", "/etc/[z-a]", "/x/[b-a]/**"]:
             with self.assertRaises(ValueError, msg=pattern):
                 patterns.check_pattern(pattern)
+        # 正規表現にできないもの（re.error）も ValueError にする。走査や比較で使うときも同じ
+        for build in (patterns.glob_to_regex, patterns.compile_include):
+            with self.assertRaises(ValueError):
+                build("/etc/[z-a]")
 
 
 class PruningTest(unittest.TestCase):

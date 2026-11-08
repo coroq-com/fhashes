@@ -188,6 +188,14 @@ class RecordTest(RecordTestBase):
         with self.assertRaises(config.ConfigError):
             config.load_record_config(path)
 
+    def test_invalid_wildcard_is_config_error(self):
+        # 正規表現にできないワイルドカードは、走査の途中ではなく設定の読み込みで止める
+        path = os.path.join(self.base, "badclass.yaml")
+        with open(path, "w") as f:
+            f.write("host: testhost\ninclude:\n  - " + self.data + "/[z-a]\n")
+        with self.assertRaises(config.ConfigError):
+            config.load_record_config(path)
+
     def test_relative_state_dir_is_based_on_config_dir(self):
         config_dir = os.path.join(self.base, "conf")
         os.makedirs(config_dir)

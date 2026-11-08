@@ -15,7 +15,7 @@ import json
 import os
 import re
 
-from fhashes import timeutil
+from fhashes import patterns, timeutil
 
 FORMAT_VERSION = 1
 FILE_SUFFIX = ".ndjson.gz"
@@ -313,6 +313,12 @@ def check_header(header: dict) -> None:
     for key in ("include", "exclude"):
         if not isinstance(header[key], list) or not all(isinstance(p, str) for p in header[key]):
             raise SnapshotFormatError("ヘッダーの " + key + " が不正です")
+        # 調べる側は、このパターンで監視範囲を判定する。書き方が不正なら、使うときに止まらないように、ここで不正とする
+        for pattern in header[key]:
+            try:
+                patterns.check_pattern(pattern)
+            except ValueError as e:
+                raise SnapshotFormatError("ヘッダーの " + key + " が不正です: " + str(e))
 
 
 def check_end(end: dict, row_count: int) -> None:

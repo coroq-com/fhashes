@@ -148,7 +148,7 @@ def download_batch(conf: dict, batch: list) -> None:
 #   使うのは、記録のファイルの大きさと更新時刻が保存したときと同じで、SUMMARY_VERSION も同じ場合だけ。
 # ----------------------------------------------------------------------
 
-SUMMARY_VERSION = 1  # 検証の仕方を変えたら上げる（古い結果を使わないため）
+SUMMARY_VERSION = 2  # 検証の仕方を変えたら上げる（古い結果を使わないため）。2: ヘッダーの include / exclude の書き方も確かめる
 
 
 def summary_path(local_path: str) -> str:

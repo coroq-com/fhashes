@@ -130,5 +130,37 @@ class LogCommandTest(StorageTestCase):
         self.assertEqual(self.cli("log", "db1")[0], 1)       # 設定にはあるが、記録がまだない
 
 
+class BadHeaderPatternTest(StorageTestCase):
+    """ヘッダーの監視範囲のワイルドカードが不正な記録（偽の記録など）があっても、調べるコマンドが止まらないこと。"""
+
+    def setUp(self):
+        super().setUp()
+        self.make_snapshot(1, t(1), [("/app/a", "h1")])
+        self.make_snapshot(2, t(2), [("/app/a", "h2")])
+        # ハッシュチェーンは正しくつながっているが、監視範囲が正規表現にできない
+        self.make_snapshot(3, t(3), [("/app/a", "h3")], scope={"include": ["/app/[z-a]"], "exclude": []})
+
+    def test_reported_as_invalid_record(self):
+        for command in ("log", "diff"):
+            code, out = self.cli(command, "web1")
+            self.assertEqual(code, 1, out)
+            self.assertIn("不正な記録: web1-", out)
+            self.assertIn("ヘッダーの include が不正です", out)
+            self.assertIn("M a", out)   # 正常な記録どうしの変化は出る
+
+    def test_status_is_not_ok(self):
+        code, out = self.cli("status")
+        self.assertEqual(code, 1, out)
+        self.assertIn("最新の記録が不正", out)
+
+    def test_check_uses_last_valid_record(self):
+        snap = os.path.join(self.base, "snap")
+        helpers.write_file(snap, "app/a", "x")
+        code, out = self.cli("check", "web1", "--map", "/:" + snap)
+        self.assertEqual(code, 1, out)
+        self.assertIn("比べる記録: 2026-09-01 02:00\n", out)
+        self.assertIn("不正な記録: web1-", out)
+
+
 if __name__ == "__main__":
     unittest.main()
